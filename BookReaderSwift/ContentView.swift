@@ -2,13 +2,20 @@ import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
+        VStack(spacing: 16) {
+            Image(systemName: "book.pages")
+                .font(.system(size: 64, weight: .thin))
                 .foregroundStyle(.tint)
-            Text("Hello, world!")
+
+            Text("SwiftBookReader")
+                .font(.system(size: 32, weight: .semibold, design: .serif))
+
+            Text("Твоя минималистичная библиотека")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
-        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
     }
 }
 
