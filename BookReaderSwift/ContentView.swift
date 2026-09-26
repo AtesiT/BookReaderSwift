@@ -22,6 +22,16 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    isImporting = true
+                } label: {
+                    Label("Открыть книгу", systemImage: "folder")
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
+        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.plainText, markdownType],
