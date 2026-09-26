@@ -1,5 +1,21 @@
 import SwiftUI
+import SwiftData
 import UniformTypeIdentifiers
+
+@Model
+final class Book {
+    var title: String
+    var content: String
+    var dateAdded: Date
+    var fileExtension: String
+
+    init(title: String, content: String, fileExtension: String) {
+        self.title = title
+        self.content = content
+        self.dateAdded = .now
+        self.fileExtension = fileExtension
+    }
+}
 
 struct ContentView: View {
 
