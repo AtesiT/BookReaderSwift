@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
 
     @State private var isImporting = false
-    @State private var selectedFileURL: URL?
+    @State private var bookTitle: String = ""
     @State private var bookText: String?
     @State private var errorMessage: String?
 
@@ -13,39 +13,12 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "book.pages")
-                .font(.system(size: 64, weight: .thin))
-                .foregroundStyle(.tint)
-
-            Text("BookReaderSwift")
-                .font(.system(size: 32, weight: .semibold, design: .serif))
-
+        Group {
             if let bookText {
-                Text(bookText.prefix(200) + "…")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .padding(.horizontal, 40)
-            } else if let errorMessage {
-                Text(errorMessage)
-                    .font(.subheadline)
-                    .foregroundStyle(.red)
+                readerView(text: bookText)
             } else {
-                Text("Открой файл .txt или .md, чтобы начать чтение")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                emptyStateView
             }
-
-            Button {
-                isImporting = true
-            } label: {
-                Label("Открыть книгу", systemImage: "folder")
-                    .padding(.horizontal, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
@@ -65,6 +38,56 @@ struct ContentView: View {
         }
     }
 
+    private var emptyStateView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "book.pages")
+                .font(.system(size: 64, weight: .thin))
+                .foregroundStyle(.tint)
+
+            Text("BookReaderSwift")
+                .font(.system(size: 32, weight: .semibold, design: .serif))
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            } else {
+                Text("Открой файл .txt или .md, чтобы начать чтение")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                isImporting = true
+            } label: {
+                Label("Открыть книгу", systemImage: "folder")
+                    .padding(.horizontal, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.top, 8)
+        }
+    }
+
+    private func readerView(text: String) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text(bookTitle)
+                    .font(.system(size: 24, weight: .bold, design: .serif))
+
+                Text(text)
+                    .font(.system(size: 17, weight: .regular, design: .serif))
+                    .lineSpacing(8)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: 680, alignment: .leading)
+            .padding(.vertical, 48)
+            .padding(.horizontal, 32)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollIndicators(.hidden)
+    }
+
     private func loadBook(from url: URL) {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
@@ -75,7 +98,7 @@ struct ContentView: View {
 
         do {
             bookText = try String(contentsOf: url, encoding: .utf8)
-            selectedFileURL = url
+            bookTitle = url.deletingPathExtension().lastPathComponent
             errorMessage = nil
         } catch {
             errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
