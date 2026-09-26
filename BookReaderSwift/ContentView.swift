@@ -9,11 +9,25 @@ final class Book {
     var dateAdded: Date
     var fileExtension: String
 
+    @Relationship(deleteRule: .cascade)
+    var readingSession: ReadingSession?
+
     init(title: String, content: String, fileExtension: String) {
         self.title = title
         self.content = content
         self.dateAdded = .now
         self.fileExtension = fileExtension
+    }
+}
+
+@Model
+final class ReadingSession {
+    var scrollOffset: Double
+    var lastOpened: Date
+
+    init(scrollOffset: Double = 0, lastOpened: Date = .now) {
+        self.scrollOffset = scrollOffset
+        self.lastOpened = lastOpened
     }
 }
 
