@@ -31,9 +31,50 @@ final class ReadingSession {
     }
 }
 
+private func generatedColor(from string: String) -> Color {
+    var hasher = Hasher()
+    hasher.combine(string)
+    let hash = abs(hasher.finalize())
+
+    let hue = Double(hash % 360) / 360.0
+    return Color(hue: hue, saturation: 0.55, brightness: 0.85)
+}
+
+struct BookCoverView: View {
+    let title: String
+
+    private var initials: String {
+        let words = title.split(separator: " ")
+        let letters = words.prefix(2).compactMap { $0.first }
+        return String(letters).uppercased()
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        generatedColor(from: title),
+                        generatedColor(from: title).opacity(0.7)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .aspectRatio(2/3, contentMode: .fit)
+            .overlay {
+                Text(initials)
+                    .font(.system(size: 32, weight: .bold, design: .serif))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            .shadow(color: .black.opacity(0.15), radius: 6, y: 4)
+    }
+}
+
 struct ContentView: View {
 
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
 
     @State private var isImporting = false
     @State private var currentBook: Book?
@@ -43,12 +84,16 @@ struct ContentView: View {
         UTType(filenameExtension: "md") ?? .plainText
     }
 
+    private let gridColumns = [
+        GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)
+    ]
+
     var body: some View {
         Group {
             if let currentBook {
                 readerView(book: currentBook)
             } else {
-                emptyStateView
+                libraryView
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -75,6 +120,36 @@ struct ContentView: View {
                 }
             case .failure(let error):
                 errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private var libraryView: some View {
+        Group {
+            if books.isEmpty {
+                emptyStateView
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: gridColumns, spacing: 28) {
+                        ForEach(books) { book in
+                            Button {
+                                currentBook = book
+                            } label: {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    BookCoverView(title: book.title)
+
+                                    Text(book.title)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(32)
+                }
+                .scrollIndicators(.hidden)
             }
         }
     }
@@ -127,6 +202,15 @@ struct ContentView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollIndicators(.hidden)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    currentBook = nil
+                } label: {
+                    Label("К библиотеке", systemImage: "chevron.left")
+                }
+            }
+        }
     }
 
     private func importBook(from url: URL) {
@@ -157,3 +241,4 @@ struct ContentView: View {
     ContentView()
         .modelContainer(for: [Book.self, ReadingSession.self], inMemory: true)
 }
+
