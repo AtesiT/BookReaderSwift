@@ -111,6 +111,7 @@ struct ContentView: View {
     @State private var isImporting = false
     @State private var currentBook: Book?
     @State private var errorMessage: String?
+    @State private var sidebarSelection: String? = "library"
 
     private var markdownType: UTType {
         UTType(filenameExtension: "md") ?? .plainText
@@ -121,23 +122,27 @@ struct ContentView: View {
     ]
 
     var body: some View {
-        Group {
-            if let currentBook {
-                readerView(book: currentBook)
-            } else {
-                libraryView
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    isImporting = true
-                } label: {
-                    Label("Открыть книгу", systemImage: "folder")
+        NavigationSplitView {
+            sidebarView
+        } detail: {
+            Group {
+                if let currentBook {
+                    readerView(book: currentBook)
+                } else {
+                    libraryView
                 }
-                .keyboardShortcut("o", modifiers: .command)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.background)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isImporting = true
+                    } label: {
+                        Label("Открыть книгу", systemImage: "folder")
+                    }
+                    .keyboardShortcut("o", modifiers: .command)
+                }
             }
         }
         .fileImporter(
@@ -154,6 +159,14 @@ struct ContentView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private var sidebarView: some View {
+        List(selection: $sidebarSelection) {
+            Label("Библиотека", systemImage: "books.vertical")
+                .tag("library" as String?)
+        }
+        .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
     }
 
     private var libraryView: some View {
@@ -175,7 +188,7 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             ZStack {
@@ -212,7 +225,7 @@ struct ContentView: View {
             .padding(.top, 8)
         }
     }
-
+    
     private func readerView(book: Book) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
