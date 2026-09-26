@@ -33,9 +33,10 @@ final class ReadingSession {
 
 struct ContentView: View {
 
+    @Environment(\.modelContext) private var modelContext
+
     @State private var isImporting = false
-    @State private var bookTitle: String = ""
-    @State private var bookText: String?
+    @State private var currentBook: Book?
     @State private var errorMessage: String?
 
     private var markdownType: UTType {
@@ -44,8 +45,8 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if let bookText {
-                readerView(text: bookText)
+            if let currentBook {
+                readerView(book: currentBook)
             } else {
                 emptyStateView
             }
@@ -70,7 +71,7 @@ struct ContentView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    loadBook(from: url)
+                    importBook(from: url)
                 }
             case .failure(let error):
                 errorMessage = error.localizedDescription
@@ -109,13 +110,13 @@ struct ContentView: View {
         }
     }
 
-    private func readerView(text: String) -> some View {
+    private func readerView(book: Book) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text(bookTitle)
+                Text(book.title)
                     .font(.system(size: 24, weight: .bold, design: .serif))
 
-                Text(text)
+                Text(book.content)
                     .font(.system(size: 17, weight: .regular, design: .serif))
                     .lineSpacing(8)
                     .textSelection(.enabled)
@@ -128,7 +129,7 @@ struct ContentView: View {
         .scrollIndicators(.hidden)
     }
 
-    private func loadBook(from url: URL) {
+    private func importBook(from url: URL) {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {
@@ -137,16 +138,22 @@ struct ContentView: View {
         }
 
         do {
-            bookText = try String(contentsOf: url, encoding: .utf8)
-            bookTitle = url.deletingPathExtension().lastPathComponent
+            let content = try String(contentsOf: url, encoding: .utf8)
+            let title = url.deletingPathExtension().lastPathComponent
+            let fileExtension = url.pathExtension
+
+            let book = Book(title: title, content: content, fileExtension: fileExtension)
+            modelContext.insert(book)
+
+            currentBook = book
             errorMessage = nil
         } catch {
             errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
-            bookText = nil
         }
     }
 }
 
 #Preview {
     ContentView()
+        .modelContainer(for: [Book.self, ReadingSession.self], inMemory: true)
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 @main
 struct BookReaderSwiftApp: App {
@@ -14,5 +15,6 @@ struct BookReaderSwiftApp: App {
         .commands {
             CommandGroup(replacing: .newItem) { }
         }
+        .modelContainer(for: [Book.self, ReadingSession.self])
     }
 }
