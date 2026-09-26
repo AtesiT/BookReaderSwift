@@ -71,6 +71,38 @@ struct BookCoverView: View {
     }
 }
 
+struct LibraryBookCell: View {
+    let book: Book
+    let onOpen: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onOpen) {
+            VStack(alignment: .leading, spacing: 8) {
+                BookCoverView(title: book.title)
+                    .scaleEffect(isHovering ? 1.03 : 1.0)
+                    .shadow(
+                        color: .black.opacity(isHovering ? 0.25 : 0.15),
+                        radius: isHovering ? 10 : 6,
+                        y: isHovering ? 6 : 4
+                    )
+
+                Text(book.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
 struct ContentView: View {
 
     @Environment(\.modelContext) private var modelContext
@@ -132,19 +164,9 @@ struct ContentView: View {
                 ScrollView {
                     LazyVGrid(columns: gridColumns, spacing: 28) {
                         ForEach(books) { book in
-                            Button {
+                            LibraryBookCell(book: book) {
                                 currentBook = book
-                            } label: {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    BookCoverView(title: book.title)
-
-                                    Text(book.title)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(2)
-                                }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     .padding(32)
@@ -153,12 +175,18 @@ struct ContentView: View {
             }
         }
     }
-
+    
     private var emptyStateView: some View {
         VStack(spacing: 16) {
-            Image(systemName: "book.pages")
-                .font(.system(size: 64, weight: .thin))
-                .foregroundStyle(.tint)
+            ZStack {
+                Circle()
+                    .fill(.tint.opacity(0.12))
+                    .frame(width: 120, height: 120)
+
+                Image(systemName: "book.pages")
+                    .font(.system(size: 52, weight: .thin))
+                    .foregroundStyle(.tint)
+            }
 
             Text("BookReaderSwift")
                 .font(.system(size: 32, weight: .semibold, design: .serif))
