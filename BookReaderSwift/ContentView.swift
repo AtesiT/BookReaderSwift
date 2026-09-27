@@ -112,7 +112,8 @@ struct ContentView: View {
     @State private var currentBook: Book?
     @State private var errorMessage: String?
     @State private var sidebarSelection: String? = "library"
-
+    @State private var fontSize: Double = 17
+    
     private var markdownType: UTType {
         UTType(filenameExtension: "md") ?? .plainText
     }
@@ -228,18 +229,20 @@ struct ContentView: View {
     
     private func readerView(book: Book) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 28) {
                 Text(book.title)
-                    .font(.system(size: 24, weight: .bold, design: .serif))
+                    .font(.system(size: 26, weight: .bold, design: .serif))
+                    .padding(.bottom, 4)
 
                 Text(book.content)
-                    .font(.system(size: 17, weight: .regular, design: .serif))
-                    .lineSpacing(8)
+                    .font(.system(size: fontSize, weight: .regular, design: .serif))
+                    .lineSpacing(fontSize * 0.5)
+                    .foregroundStyle(.primary.opacity(0.9))
                     .textSelection(.enabled)
             }
-            .frame(maxWidth: 680, alignment: .leading)
-            .padding(.vertical, 48)
-            .padding(.horizontal, 32)
+            .frame(maxWidth: 640, alignment: .leading)
+            .padding(.vertical, 64)
+            .padding(.horizontal, 40)
             .frame(maxWidth: .infinity)
         }
         .scrollIndicators(.hidden)
@@ -250,6 +253,22 @@ struct ContentView: View {
                 } label: {
                     Label("К библиотеке", systemImage: "chevron.left")
                 }
+            }
+
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    fontSize = max(13, fontSize - 1)
+                } label: {
+                    Image(systemName: "textformat.size.smaller")
+                }
+                .disabled(fontSize <= 13)
+
+                Button {
+                    fontSize = min(28, fontSize + 1)
+                } label: {
+                    Image(systemName: "textformat.size.larger")
+                }
+                .disabled(fontSize >= 28)
             }
         }
     }
