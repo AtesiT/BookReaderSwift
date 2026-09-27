@@ -42,6 +42,7 @@ private func generatedColor(from string: String) -> Color {
 
 struct BookCoverView: View {
     let title: String
+    var progress: Double = 0
 
     private var initials: String {
         let words = title.split(separator: " ")
@@ -67,8 +68,56 @@ struct BookCoverView: View {
                     .font(.system(size: 32, weight: .bold, design: .serif))
                     .foregroundStyle(.white.opacity(0.9))
             }
+            .overlay(alignment: .bottom) {
+                if progress > 0.01 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Rectangle()
+                                .fill(.white.opacity(0.25))
+                            Rectangle()
+                                .fill(.white)
+                                .frame(width: geo.size.width * progress)
+                        }
+                    }
+                    .frame(height: 4)
+                    .clipShape(RoundedCorner(radius: 12, corners: [.bottomLeft, .bottomRight]))
+                }
+            }
             .shadow(color: .black.opacity(0.15), radius: 6, y: 4)
     }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat
+    var corners: NSRectCorner
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let topLeft = corners.contains(.topLeft) ? radius : 0
+        let topRight = corners.contains(.topRight) ? radius : 0
+        let bottomLeft = corners.contains(.bottomLeft) ? radius : 0
+        let bottomRight = corners.contains(.bottomRight) ? radius : 0
+
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - topRight, y: rect.minY))
+        path.addArc(center: CGPoint(x: rect.maxX - topRight, y: rect.minY + topRight), radius: topRight, startAngle: .degrees(-90), endAngle: .degrees(0), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomRight))
+        path.addArc(center: CGPoint(x: rect.maxX - bottomRight, y: rect.maxY - bottomRight), radius: bottomRight, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY))
+        path.addArc(center: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY - bottomLeft), radius: bottomLeft, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeft))
+        path.addArc(center: CGPoint(x: rect.minX + topLeft, y: rect.minY + topLeft), radius: topLeft, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct NSRectCorner: OptionSet {
+    let rawValue: Int
+    static let topLeft = NSRectCorner(rawValue: 1 << 0)
+    static let topRight = NSRectCorner(rawValue: 1 << 1)
+    static let bottomLeft = NSRectCorner(rawValue: 1 << 2)
+    static let bottomRight = NSRectCorner(rawValue: 1 << 3)
 }
 
 struct LibraryBookCell: View {
@@ -77,10 +126,14 @@ struct LibraryBookCell: View {
 
     @State private var isHovering = false
 
+    private var progress: Double {
+        book.readingSession?.scrollOffset ?? 0
+    }
+
     var body: some View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 8) {
-                BookCoverView(title: book.title)
+                BookCoverView(title: book.title, progress: progress)
                     .scaleEffect(isHovering ? 1.03 : 1.0)
                     .shadow(
                         color: .black.opacity(isHovering ? 0.25 : 0.15),
