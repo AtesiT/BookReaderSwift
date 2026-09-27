@@ -31,6 +31,46 @@ final class ReadingSession {
     }
 }
 
+enum ReadingTheme: String, CaseIterable, Identifiable {
+    case light
+    case dark
+    case sepia
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .light: "Светлая"
+        case .dark: "Тёмная"
+        case .sepia: "Сепия"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .light: "sun.max"
+        case .dark: "moon"
+        case .sepia: "book.closed"
+        }
+    }
+
+    var backgroundColor: Color {
+        switch self {
+        case .light: Color(red: 1.0, green: 1.0, blue: 1.0)
+        case .dark: Color(red: 0.11, green: 0.11, blue: 0.12)
+        case .sepia: Color(red: 0.96, green: 0.91, blue: 0.79)
+        }
+    }
+
+    var textColor: Color {
+        switch self {
+        case .light: Color(red: 0.1, green: 0.1, blue: 0.1)
+        case .dark: Color(red: 0.92, green: 0.92, blue: 0.90)
+        case .sepia: Color(red: 0.30, green: 0.22, blue: 0.13)
+        }
+    }
+}
+
 private func generatedColor(from string: String) -> Color {
     var hasher = Hasher()
     hasher.combine(string)
@@ -160,10 +200,15 @@ struct ReaderView: View {
     @Bindable var book: Book
     let onClose: () -> Void
 
+    @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
     @State private var fontSize: Double = 17
     @State private var scrollProgress: Double = 0
     @State private var scrollPosition = ScrollPosition()
     @State private var hasRestoredPosition = false
+
+    private var theme: ReadingTheme {
+        ReadingTheme(rawValue: themeRawValue) ?? .light
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -178,12 +223,13 @@ struct ReaderView: View {
                 VStack(alignment: .leading, spacing: 28) {
                     Text(book.title)
                         .font(.system(size: 26, weight: .bold, design: .serif))
+                        .foregroundStyle(theme.textColor)
                         .padding(.bottom, 4)
 
                     Text(book.content)
                         .font(.system(size: fontSize, weight: .regular, design: .serif))
                         .lineSpacing(fontSize * 0.5)
-                        .foregroundStyle(.primary.opacity(0.9))
+                        .foregroundStyle(theme.textColor.opacity(0.9))
                         .textSelection(.enabled)
                 }
                 .frame(maxWidth: 640, alignment: .leading)
@@ -197,6 +243,7 @@ struct ReaderView: View {
                 handleScrollChange(geometry)
             }
         }
+        .background(theme.backgroundColor)
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button(action: onClose) {
@@ -205,6 +252,18 @@ struct ReaderView: View {
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
+                Menu {
+                    Picker("Тема", selection: $themeRawValue) {
+                        ForEach(ReadingTheme.allCases) { theme in
+                            Label(theme.displayName, systemImage: theme.iconName)
+                                .tag(theme.rawValue)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Image(systemName: theme.iconName)
+                }
+
                 Button {
                     fontSize = max(13, fontSize - 1)
                 } label: {
@@ -295,16 +354,46 @@ struct ContentView: View {
                 }
             }
         }
+        .fileImporter(
+            isPresented: $isImporting,
+            allowedContentTypes: [.plainText, markdownType],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    importBook(from: url)
+                }
+            case .failure(let error):
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private var sidebarView: some View {
         List(selection: $sidebarSelection) {
-            Label("Библиотека", systemImage: "books.vertical")
+            Section("Моя коллекция") {
+                Label {
+                    HStack {
+                        Text("Библиотека")
+                        Spacer()
+                        Text("\(books.count)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.quaternary, in: Capsule())
+                    }
+                } icon: {
+                    Image(systemName: "books.vertical")
+                }
                 .tag("library" as String?)
+            }
         }
         .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+        .listStyle(.sidebar)
     }
-
+    
     private var libraryView: some View {
         Group {
             if books.isEmpty {
@@ -361,7 +450,7 @@ struct ContentView: View {
             .padding(.top, 8)
         }
     }
-    
+
     private func importBook(from url: URL) {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
@@ -390,4 +479,3 @@ struct ContentView: View {
     ContentView()
         .modelContainer(for: [Book.self, ReadingSession.self], inMemory: true)
 }
-
