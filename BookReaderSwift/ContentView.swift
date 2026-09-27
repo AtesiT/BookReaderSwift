@@ -103,6 +103,101 @@ struct LibraryBookCell: View {
     }
 }
 
+struct ReaderView: View {
+    @Bindable var book: Book
+    let onClose: () -> Void
+
+    @State private var fontSize: Double = 17
+    @State private var scrollProgress: Double = 0
+    @State private var scrollPosition = ScrollPosition()
+    @State private var hasRestoredPosition = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ProgressView(value: scrollProgress)
+                .progressViewStyle(.linear)
+                .tint(.accentColor)
+                .frame(height: 2)
+                .opacity(scrollProgress > 0 ? 1 : 0)
+                .animation(.easeOut(duration: 0.2), value: scrollProgress)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    Text(book.title)
+                        .font(.system(size: 26, weight: .bold, design: .serif))
+                        .padding(.bottom, 4)
+
+                    Text(book.content)
+                        .font(.system(size: fontSize, weight: .regular, design: .serif))
+                        .lineSpacing(fontSize * 0.5)
+                        .foregroundStyle(.primary.opacity(0.9))
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: 640, alignment: .leading)
+                .padding(.vertical, 64)
+                .padding(.horizontal, 40)
+                .frame(maxWidth: .infinity)
+            }
+            .scrollIndicators(.hidden)
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
+                handleScrollChange(geometry)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: onClose) {
+                    Label("К библиотеке", systemImage: "chevron.left")
+                }
+            }
+
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    fontSize = max(13, fontSize - 1)
+                } label: {
+                    Image(systemName: "textformat.size.smaller")
+                }
+                .disabled(fontSize <= 13)
+
+                Button {
+                    fontSize = min(28, fontSize + 1)
+                } label: {
+                    Image(systemName: "textformat.size.larger")
+                }
+                .disabled(fontSize >= 28)
+            }
+        }
+    }
+
+    private func handleScrollChange(_ geometry: ScrollGeometry) {
+        let maxOffset = geometry.contentSize.height - geometry.containerSize.height
+        guard maxOffset > 0 else { return }
+
+        let progress = min(max(geometry.contentOffset.y / maxOffset, 0), 1)
+        scrollProgress = progress
+
+        if !hasRestoredPosition {
+            hasRestoredPosition = true
+            let savedProgress = book.readingSession?.scrollOffset ?? 0
+            if savedProgress > 0.01 {
+                scrollPosition.scrollTo(y: savedProgress * maxOffset)
+            }
+            return
+        }
+
+        saveProgress(progress)
+    }
+
+    private func saveProgress(_ progress: Double) {
+        if let session = book.readingSession {
+            session.scrollOffset = progress
+            session.lastOpened = .now
+        } else {
+            book.readingSession = ReadingSession(scrollOffset: progress)
+        }
+    }
+}
+
 struct ContentView: View {
 
     @Environment(\.modelContext) private var modelContext
@@ -112,9 +207,7 @@ struct ContentView: View {
     @State private var currentBook: Book?
     @State private var errorMessage: String?
     @State private var sidebarSelection: String? = "library"
-    @State private var fontSize: Double = 17
-    @State private var scrollProgress: Double = 0
-    
+
     private var markdownType: UTType {
         UTType(filenameExtension: "md") ?? .plainText
     }
@@ -129,7 +222,9 @@ struct ContentView: View {
         } detail: {
             Group {
                 if let currentBook {
-                    readerView(book: currentBook)
+                    ReaderView(book: currentBook) {
+                        self.currentBook = nil
+                    }
                 } else {
                     libraryView
                 }
@@ -145,20 +240,6 @@ struct ContentView: View {
                     }
                     .keyboardShortcut("o", modifiers: .command)
                 }
-            }
-        }
-        .fileImporter(
-            isPresented: $isImporting,
-            allowedContentTypes: [.plainText, markdownType],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first {
-                    importBook(from: url)
-                }
-            case .failure(let error):
-                errorMessage = error.localizedDescription
             }
         }
     }
@@ -228,68 +309,6 @@ struct ContentView: View {
         }
     }
     
-    private func readerView(book: Book) -> some View {
-        VStack(spacing: 0) {
-            ProgressView(value: scrollProgress)
-                .progressViewStyle(.linear)
-                .tint(.accentColor)
-                .frame(height: 2)
-                .opacity(scrollProgress > 0 ? 1 : 0)
-                .animation(.easeOut(duration: 0.2), value: scrollProgress)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    Text(book.title)
-                        .font(.system(size: 26, weight: .bold, design: .serif))
-                        .padding(.bottom, 4)
-
-                    Text(book.content)
-                        .font(.system(size: fontSize, weight: .regular, design: .serif))
-                        .lineSpacing(fontSize * 0.5)
-                        .foregroundStyle(.primary.opacity(0.9))
-                        .textSelection(.enabled)
-                }
-                .frame(maxWidth: 640, alignment: .leading)
-                .padding(.vertical, 64)
-                .padding(.horizontal, 40)
-                .frame(maxWidth: .infinity)
-            }
-            .scrollIndicators(.hidden)
-            .onScrollGeometryChange(for: Double.self) { geometry in
-                let maxOffset = geometry.contentSize.height - geometry.containerSize.height
-                guard maxOffset > 0 else { return 0 }
-                return min(max(geometry.contentOffset.y / maxOffset, 0), 1)
-            } action: { _, newValue in
-                scrollProgress = newValue
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    currentBook = nil
-                } label: {
-                    Label("К библиотеке", systemImage: "chevron.left")
-                }
-            }
-
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    fontSize = max(13, fontSize - 1)
-                } label: {
-                    Image(systemName: "textformat.size.smaller")
-                }
-                .disabled(fontSize <= 13)
-
-                Button {
-                    fontSize = min(28, fontSize + 1)
-                } label: {
-                    Image(systemName: "textformat.size.larger")
-                }
-                .disabled(fontSize >= 28)
-            }
-        }
-    }
-
     private func importBook(from url: URL) {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
