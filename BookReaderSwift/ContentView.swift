@@ -113,6 +113,7 @@ struct ContentView: View {
     @State private var errorMessage: String?
     @State private var sidebarSelection: String? = "library"
     @State private var fontSize: Double = 17
+    @State private var scrollProgress: Double = 0
     
     private var markdownType: UTType {
         UTType(filenameExtension: "md") ?? .plainText
@@ -228,24 +229,40 @@ struct ContentView: View {
     }
     
     private func readerView(book: Book) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                Text(book.title)
-                    .font(.system(size: 26, weight: .bold, design: .serif))
-                    .padding(.bottom, 4)
+        VStack(spacing: 0) {
+            ProgressView(value: scrollProgress)
+                .progressViewStyle(.linear)
+                .tint(.accentColor)
+                .frame(height: 2)
+                .opacity(scrollProgress > 0 ? 1 : 0)
+                .animation(.easeOut(duration: 0.2), value: scrollProgress)
 
-                Text(book.content)
-                    .font(.system(size: fontSize, weight: .regular, design: .serif))
-                    .lineSpacing(fontSize * 0.5)
-                    .foregroundStyle(.primary.opacity(0.9))
-                    .textSelection(.enabled)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    Text(book.title)
+                        .font(.system(size: 26, weight: .bold, design: .serif))
+                        .padding(.bottom, 4)
+
+                    Text(book.content)
+                        .font(.system(size: fontSize, weight: .regular, design: .serif))
+                        .lineSpacing(fontSize * 0.5)
+                        .foregroundStyle(.primary.opacity(0.9))
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: 640, alignment: .leading)
+                .padding(.vertical, 64)
+                .padding(.horizontal, 40)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: 640, alignment: .leading)
-            .padding(.vertical, 64)
-            .padding(.horizontal, 40)
-            .frame(maxWidth: .infinity)
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: Double.self) { geometry in
+                let maxOffset = geometry.contentSize.height - geometry.containerSize.height
+                guard maxOffset > 0 else { return 0 }
+                return min(max(geometry.contentOffset.y / maxOffset, 0), 1)
+            } action: { _, newValue in
+                scrollProgress = newValue
+            }
         }
-        .scrollIndicators(.hidden)
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button {
