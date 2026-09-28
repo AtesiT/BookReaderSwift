@@ -71,6 +71,30 @@ enum ReadingTheme: String, CaseIterable, Identifiable {
     }
 }
 
+enum ReadingFont: String, CaseIterable, Identifiable {
+    case serif
+    case sans
+    case monospace
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .serif: "Serif"
+        case .sans: "Sans"
+        case .monospace: "Monospace"
+        }
+    }
+
+    var design: Font.Design {
+        switch self {
+        case .serif: .serif
+        case .sans: .default
+        case .monospace: .monospaced
+        }
+    }
+}
+
 private func generatedColor(from string: String) -> Color {
     var hasher = Hasher()
     hasher.combine(string)
@@ -201,6 +225,7 @@ struct ReaderView: View {
     let onClose: () -> Void
 
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
+    @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
     @State private var fontSize: Double = 17
     @State private var scrollProgress: Double = 0
     @State private var scrollPosition = ScrollPosition()
@@ -208,6 +233,10 @@ struct ReaderView: View {
 
     private var theme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
+    }
+
+    private var font: ReadingFont {
+        ReadingFont(rawValue: fontRawValue) ?? .serif
     }
 
     var body: some View {
@@ -222,12 +251,12 @@ struct ReaderView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     Text(book.title)
-                        .font(.system(size: 26, weight: .bold, design: .serif))
+                        .font(.system(size: 26, weight: .bold, design: font.design))
                         .foregroundStyle(theme.textColor)
                         .padding(.bottom, 4)
 
                     Text(book.content)
-                        .font(.system(size: fontSize, weight: .regular, design: .serif))
+                        .font(.system(size: fontSize, weight: .regular, design: font.design))
                         .lineSpacing(fontSize * 0.5)
                         .foregroundStyle(theme.textColor.opacity(0.9))
                         .textSelection(.enabled)
@@ -257,6 +286,14 @@ struct ReaderView: View {
                         ForEach(ReadingTheme.allCases) { theme in
                             Label(theme.displayName, systemImage: theme.iconName)
                                 .tag(theme.rawValue)
+                        }
+                    }
+                    .pickerStyle(.inline)
+
+                    Picker("Шрифт", selection: $fontRawValue) {
+                        ForEach(ReadingFont.allCases) { font in
+                            Text(font.displayName)
+                                .tag(font.rawValue)
                         }
                     }
                     .pickerStyle(.inline)
