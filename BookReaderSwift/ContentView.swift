@@ -238,6 +238,7 @@ struct LibraryBookCell: View {
 struct ReaderView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var book: Book
+    var initialScrollOverride: Double?
     let onClose: () -> Void
 
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
@@ -346,7 +347,7 @@ struct ReaderView: View {
 
         if !hasRestoredPosition {
             hasRestoredPosition = true
-            let savedProgress = book.readingSession?.scrollOffset ?? 0
+            let savedProgress = initialScrollOverride ?? book.readingSession?.scrollOffset ?? 0
             if savedProgress > 0.01 {
                 scrollPosition.scrollTo(y: savedProgress * maxOffset)
             }
@@ -390,9 +391,11 @@ struct ContentView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
+    @Query(sort: \Bookmark.dateCreated, order: .reverse) private var bookmarks: [Bookmark]
 
     @State private var isImporting = false
     @State private var currentBook: Book?
+    @State private var pendingScrollTarget: Double?
     @State private var errorMessage: String?
     @State private var sidebarSelection: String? = "library"
 
@@ -410,8 +413,9 @@ struct ContentView: View {
         } detail: {
             Group {
                 if let currentBook {
-                    ReaderView(book: currentBook) {
+                    ReaderView(book: currentBook, initialScrollOverride: pendingScrollTarget) {
                         self.currentBook = nil
+                        self.pendingScrollTarget = nil
                     }
                 } else {
                     libraryView
@@ -465,8 +469,36 @@ struct ContentView: View {
                 }
                 .tag("library" as String?)
             }
+
+            if !bookmarks.isEmpty {
+                Section("Закладки") {
+                    ForEach(bookmarks) { bookmark in
+                        Button {
+                            openBookmark(bookmark)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(bookmark.book?.title ?? "Неизвестная книга")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(bookmark.snippet)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                deleteBookmark(bookmark)
+                            } label: {
+                                Label("Удалить", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
         }
-        .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
         .listStyle(.sidebar)
     }
     
@@ -548,6 +580,16 @@ struct ContentView: View {
         } catch {
             errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
         }
+    }
+    
+    private func openBookmark(_ bookmark: Bookmark) {
+        guard let book = bookmark.book else { return }
+        pendingScrollTarget = bookmark.scrollOffset
+        currentBook = book
+    }
+
+    private func deleteBookmark(_ bookmark: Bookmark) {
+        modelContext.delete(bookmark)
     }
 }
 
