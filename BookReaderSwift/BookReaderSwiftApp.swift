@@ -15,6 +15,6 @@ struct BookReaderSwiftApp: App {
         .commands {
             CommandGroup(replacing: .newItem) { }
         }
-        .modelContainer(for: [Book.self, ReadingSession.self])
+        .modelContainer(for: [Book.self, ReadingSession.self, Bookmark.self])
     }
 }

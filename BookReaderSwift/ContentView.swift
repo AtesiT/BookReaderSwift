@@ -31,6 +31,21 @@ final class ReadingSession {
     }
 }
 
+@Model
+final class Bookmark {
+    var scrollOffset: Double
+    var snippet: String
+    var dateCreated: Date
+    var book: Book?
+
+    init(scrollOffset: Double, snippet: String, book: Book?) {
+        self.scrollOffset = scrollOffset
+        self.snippet = snippet
+        self.dateCreated = .now
+        self.book = book
+    }
+}
+
 enum ReadingTheme: String, CaseIterable, Identifiable {
     case light
     case dark
@@ -221,6 +236,7 @@ struct LibraryBookCell: View {
 }
 
 struct ReaderView: View {
+    @Environment(\.modelContext) private var modelContext
     @Bindable var book: Book
     let onClose: () -> Void
 
@@ -230,6 +246,7 @@ struct ReaderView: View {
     @State private var scrollProgress: Double = 0
     @State private var scrollPosition = ScrollPosition()
     @State private var hasRestoredPosition = false
+    @State private var lastScrollGeometry: ScrollGeometry?
 
     private var theme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
@@ -274,13 +291,13 @@ struct ReaderView: View {
         }
         .background(theme.backgroundColor)
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button(action: onClose) {
-                    Label("К библиотеке", systemImage: "chevron.left")
-                }
-            }
-
             ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    addBookmark()
+                } label: {
+                    Image(systemName: "bookmark")
+                }
+
                 Menu {
                     Picker("Тема", selection: $themeRawValue) {
                         ForEach(ReadingTheme.allCases) { theme in
@@ -319,6 +336,8 @@ struct ReaderView: View {
     }
 
     private func handleScrollChange(_ geometry: ScrollGeometry) {
+        lastScrollGeometry = geometry
+
         let maxOffset = geometry.contentSize.height - geometry.containerSize.height
         guard maxOffset > 0 else { return }
 
@@ -344,6 +363,26 @@ struct ReaderView: View {
         } else {
             book.readingSession = ReadingSession(scrollOffset: progress)
         }
+    }
+
+    private func addBookmark() {
+        let progress = scrollProgress
+        let totalLength = book.content.count
+        let approximateIndex = Int(Double(totalLength) * progress)
+        let startIndex = book.content.index(
+            book.content.startIndex,
+            offsetBy: min(approximateIndex, max(totalLength - 1, 0))
+        )
+        let snippetText = book.content[startIndex...]
+            .prefix(80)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let bookmark = Bookmark(
+            scrollOffset: progress,
+            snippet: snippetText.isEmpty ? "Начало книги" : snippetText,
+            book: book
+        )
+        modelContext.insert(bookmark)
     }
 }
 
