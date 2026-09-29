@@ -2,6 +2,10 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+extension Notification.Name {
+    static let openBookRequested = Notification.Name("openBookRequested")
+}
+
 @Model
 final class Book {
     var title: String
@@ -526,7 +530,6 @@ struct ContentView: View {
                     } label: {
                         Label("Открыть книгу", systemImage: "folder")
                     }
-                    .keyboardShortcut("o", modifiers: .command)
                 }
             }
         }
@@ -543,6 +546,9 @@ struct ContentView: View {
             case .failure(let error):
                 errorMessage = error.localizedDescription
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
+            isImporting = true
         }
     }
 

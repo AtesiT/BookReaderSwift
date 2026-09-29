@@ -13,7 +13,12 @@ struct BookReaderSwiftApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 1200, height: 800)
         .commands {
-            CommandGroup(replacing: .newItem) { }
+            CommandGroup(replacing: .newItem) {
+                Button("Открыть книгу…") {
+                    NotificationCenter.default.post(name: .openBookRequested, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
         }
         .modelContainer(for: [Book.self, ReadingSession.self, Bookmark.self])
     }
