@@ -247,6 +247,9 @@ struct ReaderView: View {
     @State private var scrollProgress: Double = 0
     @State private var scrollPosition = ScrollPosition()
     @State private var hasRestoredPosition = false
+    @State private var searchText = ""
+    @State private var isSearching = false
+    @State private var currentMatchIndex = 0
     @State private var lastScrollGeometry: ScrollGeometry?
 
     private var theme: ReadingTheme {
@@ -255,6 +258,21 @@ struct ReaderView: View {
 
     private var font: ReadingFont {
         ReadingFont(rawValue: fontRawValue) ?? .serif
+    }
+    
+    private var searchMatches: [Range<String.Index>] {
+        guard !searchText.isEmpty else { return [] }
+        var matches: [Range<String.Index>] = []
+        var searchStart = book.content.startIndex
+        while let range = book.content.range(
+            of: searchText,
+            options: .caseInsensitive,
+            range: searchStart..<book.content.endIndex
+        ) {
+            matches.append(range)
+            searchStart = range.upperBound
+        }
+        return matches
     }
 
     var body: some View {
@@ -291,6 +309,17 @@ struct ReaderView: View {
             }
         }
         .background(theme.backgroundColor)
+        .background(theme.backgroundColor)
+        .searchable(text: $searchText, isPresented: $isSearching, placement: .toolbar, prompt: "Поиск по книге")
+        .onChange(of: searchText) {
+            currentMatchIndex = 0
+            scrollToCurrentMatch()
+        }
+        .safeAreaInset(edge: .bottom) {
+            if !searchText.isEmpty {
+                searchResultsBar
+            }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -336,6 +365,58 @@ struct ReaderView: View {
         }
     }
 
+    private var searchResultsBar: some View {
+        HStack {
+            if searchMatches.isEmpty {
+                Text("Ничего не найдено")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("\(currentMatchIndex + 1) из \(searchMatches.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button {
+                    goToMatch(offset: -1)
+                } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .disabled(searchMatches.count < 2)
+
+                Button {
+                    goToMatch(offset: 1)
+                } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .disabled(searchMatches.count < 2)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.thinMaterial)
+    }
+
+    private func goToMatch(offset: Int) {
+        guard !searchMatches.isEmpty else { return }
+        let count = searchMatches.count
+        currentMatchIndex = ((currentMatchIndex + offset) % count + count) % count
+        scrollToCurrentMatch()
+    }
+
+    private func scrollToCurrentMatch() {
+        guard let geometry = lastScrollGeometry, !searchMatches.isEmpty else { return }
+        let maxOffset = geometry.contentSize.height - geometry.containerSize.height
+        guard maxOffset > 0 else { return }
+
+        let range = searchMatches[currentMatchIndex]
+        let offset = book.content.distance(from: book.content.startIndex, to: range.lowerBound)
+        let progress = Double(offset) / Double(book.content.count)
+
+        scrollPosition.scrollTo(y: progress * maxOffset)
+    }
+    
     private func handleScrollChange(_ geometry: ScrollGeometry) {
         lastScrollGeometry = geometry
 
