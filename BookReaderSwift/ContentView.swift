@@ -274,6 +274,21 @@ struct ReaderView: View {
         }
         return matches
     }
+    
+    private var attributedContent: AttributedString {
+        var attributed = AttributedString(book.content)
+
+        guard !searchMatches.isEmpty else { return attributed }
+
+        for (index, range) in searchMatches.enumerated() {
+            guard let attrRange = Range<AttributedString.Index>(range, in: attributed) else { continue }
+            attributed[attrRange].backgroundColor = index == currentMatchIndex
+                ? Color.orange.opacity(0.6)
+                : Color.yellow.opacity(0.35)
+        }
+
+        return attributed
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -291,7 +306,7 @@ struct ReaderView: View {
                         .foregroundStyle(theme.textColor)
                         .padding(.bottom, 4)
 
-                    Text(book.content)
+                    Text(attributedContent)
                         .font(.system(size: fontSize, weight: .regular, design: font.design))
                         .lineSpacing(fontSize * 0.5)
                         .foregroundStyle(theme.textColor.opacity(0.9))
