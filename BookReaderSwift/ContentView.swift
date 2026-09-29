@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 
 extension Notification.Name {
     static let openBookRequested = Notification.Name("openBookRequested")
+    static let increaseFontSizeRequested = Notification.Name("increaseFontSizeRequested")
+    static let decreaseFontSizeRequested = Notification.Name("decreaseFontSizeRequested")
+    static let focusSearchRequested = Notification.Name("focusSearchRequested")
 }
 
 @Model
@@ -333,6 +336,15 @@ struct ReaderView: View {
         .onChange(of: searchText) {
             currentMatchIndex = 0
             scrollToCurrentMatch()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
+            fontSize = min(28, fontSize + 1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .decreaseFontSizeRequested)) { _ in
+            fontSize = max(13, fontSize - 1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
+            isSearching = true
         }
         .safeAreaInset(edge: .bottom) {
             if !searchText.isEmpty {

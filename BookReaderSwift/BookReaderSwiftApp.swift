@@ -4,6 +4,9 @@ import SwiftData
 @main
 struct BookReaderSwiftApp: App {
 
+    @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
+    @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -18,6 +21,40 @@ struct BookReaderSwiftApp: App {
                     NotificationCenter.default.post(name: .openBookRequested, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: .command)
+            }
+
+            CommandGroup(after: .textEditing) {
+                Divider()
+                Button("Найти в книге") {
+                    NotificationCenter.default.post(name: .focusSearchRequested, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: .command)
+            }
+
+            CommandMenu("Чтение") {
+                Picker("Тема", selection: $themeRawValue) {
+                    ForEach(ReadingTheme.allCases) { theme in
+                        Text(theme.displayName).tag(theme.rawValue)
+                    }
+                }
+
+                Picker("Шрифт", selection: $fontRawValue) {
+                    ForEach(ReadingFont.allCases) { font in
+                        Text(font.displayName).tag(font.rawValue)
+                    }
+                }
+
+                Divider()
+
+                Button("Увеличить шрифт") {
+                    NotificationCenter.default.post(name: .increaseFontSizeRequested, object: nil)
+                }
+                .keyboardShortcut("+", modifiers: .command)
+
+                Button("Уменьшить шрифт") {
+                    NotificationCenter.default.post(name: .decreaseFontSizeRequested, object: nil)
+                }
+                .keyboardShortcut("-", modifiers: .command)
             }
         }
         .modelContainer(for: [Book.self, ReadingSession.self, Bookmark.self])
