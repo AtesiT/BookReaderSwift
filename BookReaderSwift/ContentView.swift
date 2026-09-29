@@ -246,8 +246,9 @@ struct ReaderView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var book: Book
     var initialScrollOverride: Double?
+    @Binding var isFocusMode: Bool
     let onClose: () -> Void
-
+    
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
     @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
     @State private var fontSize: Double = 17
@@ -354,11 +355,18 @@ struct ReaderView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
+                    isFocusMode.toggle()
+                } label: {
+                    Image(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+
+                Button {
                     addBookmark()
                 } label: {
                     Image(systemName: "bookmark")
                 }
-
+                
                 Menu {
                     Picker("Тема", selection: $themeRawValue) {
                         ForEach(ReadingTheme.allCases) { theme in
@@ -510,7 +518,9 @@ struct ContentView: View {
     @State private var pendingScrollTarget: Double?
     @State private var errorMessage: String?
     @State private var sidebarSelection: String? = "library"
-
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var isFocusMode = false
+    
     private var markdownType: UTType {
         UTType(filenameExtension: "md") ?? .plainText
     }
@@ -520,12 +530,16 @@ struct ContentView: View {
     ]
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarView
         } detail: {
             Group {
                 if let currentBook {
-                    ReaderView(book: currentBook, initialScrollOverride: pendingScrollTarget) {
+                    ReaderView(
+                        book: currentBook,
+                        initialScrollOverride: pendingScrollTarget,
+                        isFocusMode: $isFocusMode
+                    ) {
                         self.currentBook = nil
                         self.pendingScrollTarget = nil
                     }
@@ -545,6 +559,7 @@ struct ContentView: View {
                 }
             }
         }
+        .toolbar(isFocusMode ? .hidden : .automatic, for: .windowToolbar)
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.plainText, markdownType],
@@ -561,6 +576,11 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
             isImporting = true
+        }
+        .onChange(of: isFocusMode) { _, newValue in
+            withAnimation(.easeInOut(duration: 0.25)) {
+                columnVisibility = newValue ? .detailOnly : .automatic
+            }
         }
     }
 
@@ -709,5 +729,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Book.self, ReadingSession.self], inMemory: true)
+        .modelContainer(for: [Book.self, ReadingSession.self, Bookmark.self], inMemory: true)
 }
