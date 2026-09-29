@@ -540,13 +540,21 @@ struct ContentView: View {
                         initialScrollOverride: pendingScrollTarget,
                         isFocusMode: $isFocusMode
                     ) {
-                        self.currentBook = nil
-                        self.pendingScrollTarget = nil
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            self.currentBook = nil
+                            self.pendingScrollTarget = nil
+                        }
                     }
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.98)),
+                        removal: .opacity
+                    ))
                 } else {
                     libraryView
+                        .transition(.opacity)
                 }
             }
+            .animation(.easeInOut(duration: 0.25), value: currentBook)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(.background)
             .toolbar {
@@ -645,7 +653,9 @@ struct ContentView: View {
                     LazyVGrid(columns: gridColumns, spacing: 28) {
                         ForEach(books) { book in
                             LibraryBookCell(book: book) {
-                                currentBook = book
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    currentBook = book
+                                }
                             }
                         }
                     }
@@ -718,10 +728,12 @@ struct ContentView: View {
     
     private func openBookmark(_ bookmark: Bookmark) {
         guard let book = bookmark.book else { return }
-        pendingScrollTarget = bookmark.scrollOffset
-        currentBook = book
+        withAnimation(.easeInOut(duration: 0.25)) {
+            pendingScrollTarget = bookmark.scrollOffset
+            currentBook = book
+        }
     }
-
+    
     private func deleteBookmark(_ bookmark: Bookmark) {
         modelContext.delete(bookmark)
     }
