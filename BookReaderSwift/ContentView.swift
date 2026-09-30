@@ -242,6 +242,61 @@ struct LibraryBookCell: View {
     }
 }
 
+struct BookmarkRow: View {
+    let bookmark: Bookmark
+    let onOpen: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onOpen) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(bookmark.book?.title ?? "Неизвестная книга")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(bookmark.snippet)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isHovering ? Color.primary.opacity(0.06) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
+struct ToolbarIconButton: View {
+    let systemName: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .foregroundStyle(isHovering ? .primary : .secondary)
+                .contentTransition(.symbolEffect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
 struct ReaderView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var book: Book
@@ -354,19 +409,15 @@ struct ReaderView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
+                ToolbarIconButton(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
                     isFocusMode.toggle()
-                } label: {
-                    Image(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
 
-                Button {
+                ToolbarIconButton(systemName: "bookmark") {
                     addBookmark()
-                } label: {
-                    Image(systemName: "bookmark")
                 }
-                
+
                 Menu {
                     Picker("Тема", selection: $themeRawValue) {
                         ForEach(ReadingTheme.allCases) { theme in
@@ -387,17 +438,13 @@ struct ReaderView: View {
                     Image(systemName: theme.iconName)
                 }
 
-                Button {
+                ToolbarIconButton(systemName: "textformat.size.smaller") {
                     fontSize = max(13, fontSize - 1)
-                } label: {
-                    Image(systemName: "textformat.size.smaller")
                 }
                 .disabled(fontSize <= 13)
 
-                Button {
+                ToolbarIconButton(systemName: "textformat.size.larger") {
                     fontSize = min(28, fontSize + 1)
-                } label: {
-                    Image(systemName: "textformat.size.larger")
                 }
                 .disabled(fontSize >= 28)
             }
@@ -615,20 +662,9 @@ struct ContentView: View {
             if !bookmarks.isEmpty {
                 Section("Закладки") {
                     ForEach(bookmarks) { bookmark in
-                        Button {
+                        BookmarkRow(bookmark: bookmark) {
                             openBookmark(bookmark)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(bookmark.book?.title ?? "Неизвестная книга")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text(bookmark.snippet)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                            }
                         }
-                        .buttonStyle(.plain)
                         .swipeActions {
                             Button(role: .destructive) {
                                 deleteBookmark(bookmark)
