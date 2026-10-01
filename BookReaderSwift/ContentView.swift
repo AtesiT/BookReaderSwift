@@ -360,6 +360,55 @@ struct LibraryGridView: View {
     }
 }
 
+struct LibrarySectionView: View {
+    let count: Int
+
+    var body: some View {
+        Section("Моя коллекция") {
+            Label {
+                HStack {
+                    Text("Библиотека")
+                    Spacer()
+                    Text("\(count)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary, in: Capsule())
+                }
+            } icon: {
+                Image(systemName: "books.vertical")
+            }
+            .tag("library" as String?)
+        }
+    }
+}
+
+struct BookmarksSectionView: View {
+    let bookmarks: [Bookmark]
+    let onOpen: (Bookmark) -> Void
+    let onDelete: (Bookmark) -> Void
+
+    var body: some View {
+        if !bookmarks.isEmpty {
+            Section("Закладки") {
+                ForEach(bookmarks) { bookmark in
+                    BookmarkRow(bookmark: bookmark) {
+                        onOpen(bookmark)
+                    }
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            onDelete(bookmark)
+                        } label: {
+                            Label("Удалить", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct ReaderView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var book: Book
@@ -704,39 +753,12 @@ struct ContentView: View {
 
     private var sidebarView: some View {
         List(selection: $sidebarSelection) {
-            Section("Моя коллекция") {
-                Label {
-                    HStack {
-                        Text("Библиотека")
-                        Spacer()
-                        Text("\(books.count)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.quaternary, in: Capsule())
-                    }
-                } icon: {
-                    Image(systemName: "books.vertical")
-                }
-                .tag("library" as String?)
-            }
+            LibrarySectionView(count: books.count)
 
-            if !bookmarks.isEmpty {
-                Section("Закладки") {
-                    ForEach(bookmarks) { bookmark in
-                        BookmarkRow(bookmark: bookmark) {
-                            openBookmark(bookmark)
-                        }
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                deleteBookmark(bookmark)
-                            } label: {
-                                Label("Удалить", systemImage: "trash")
-                            }
-                        }
-                    }
-                }
+            BookmarksSectionView(bookmarks: bookmarks) { bookmark in
+                openBookmark(bookmark)
+            } onDelete: { bookmark in
+                deleteBookmark(bookmark)
             }
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
