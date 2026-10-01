@@ -297,6 +297,69 @@ struct ToolbarIconButton: View {
     }
 }
 
+struct EmptyLibraryView: View {
+    let errorMessage: String?
+    let onOpenBook: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(.tint.opacity(0.12))
+                    .frame(width: 120, height: 120)
+
+                Image(systemName: "book.pages")
+                    .font(.system(size: 52, weight: .thin))
+                    .foregroundStyle(.tint)
+            }
+
+            Text("BookReaderSwift")
+                .font(.system(size: 32, weight: .semibold, design: .serif))
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            } else {
+                Text("Открой файл .txt или .md, чтобы начать чтение")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button(action: onOpenBook) {
+                Label("Открыть книгу", systemImage: "folder")
+                    .padding(.horizontal, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.top, 8)
+        }
+    }
+}
+
+struct LibraryGridView: View {
+    let books: [Book]
+    let onSelect: (Book) -> Void
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)
+    ]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 28) {
+                ForEach(books) { book in
+                    LibraryBookCell(book: book) {
+                        onSelect(book)
+                    }
+                }
+            }
+            .padding(32)
+        }
+        .scrollIndicators(.hidden)
+    }
+}
+
 struct ReaderView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var book: Book
@@ -683,25 +746,19 @@ struct ContentView: View {
     private var libraryView: some View {
         Group {
             if books.isEmpty {
-                emptyStateView
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: gridColumns, spacing: 28) {
-                        ForEach(books) { book in
-                            LibraryBookCell(book: book) {
-                                withAnimation(.easeInOut(duration: 0.25)) {
-                                    currentBook = book
-                                }
-                            }
-                        }
-                    }
-                    .padding(32)
+                EmptyLibraryView(errorMessage: errorMessage) {
+                    isImporting = true
                 }
-                .scrollIndicators(.hidden)
+            } else {
+                LibraryGridView(books: books) { book in
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        currentBook = book
+                    }
+                }
             }
         }
     }
-
+    
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             ZStack {
