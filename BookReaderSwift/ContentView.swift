@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import PDFKit
 
 extension Notification.Name {
     static let openBookRequested = Notification.Name("openBookRequested")
@@ -9,21 +10,36 @@ extension Notification.Name {
     static let focusSearchRequested = Notification.Name("focusSearchRequested")
 }
 
+enum BookFormat: String, Codable {
+    case text
+    case markdown
+    case pdf
+}
+
 @Model
 final class Book {
     var title: String
     var content: String
     var dateAdded: Date
     var fileExtension: String
+    var formatRawValue: String
+    var pdfData: Data?
 
     @Relationship(deleteRule: .cascade)
     var readingSession: ReadingSession?
 
-    init(title: String, content: String, fileExtension: String) {
+    var format: BookFormat {
+        get { BookFormat(rawValue: formatRawValue) ?? .text }
+        set { formatRawValue = newValue.rawValue }
+    }
+
+    init(title: String, content: String, fileExtension: String, format: BookFormat, pdfData: Data? = nil) {
         self.title = title
         self.content = content
         self.dateAdded = .now
         self.fileExtension = fileExtension
+        self.formatRawValue = format.rawValue
+        self.pdfData = pdfData
     }
 }
 
@@ -120,6 +136,54 @@ enum ReadingFont: String, CaseIterable, Identifiable {
         case .serif: .serif
         case .sans: .default
         case .monospace: .monospaced
+        }
+    }
+}
+
+struct PDFKitView: NSViewRepresentable {
+    let data: Data
+    @Binding var currentPageIndex: Int
+
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.document = PDFDocument(data: data)
+
+        if let document = view.document, currentPageIndex < document.pageCount,
+           let page = document.page(at: currentPageIndex) {
+            view.go(to: page)
+        }
+
+        context.coordinator.pdfView = view
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.pageChanged),
+            name: .PDFViewPageChanged,
+            object: view
+        )
+
+        return view
+    }
+
+    func updateNSView(_ nsView: PDFView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(currentPageIndex: $currentPageIndex)
+    }
+
+    final class Coordinator: NSObject {
+        weak var pdfView: PDFView?
+        var currentPageIndex: Binding<Int>
+
+        init(currentPageIndex: Binding<Int>) {
+            self.currentPageIndex = currentPageIndex
+        }
+
+        @objc func pageChanged() {
+            guard let pdfView, let page = pdfView.currentPage,
+                  let document = pdfView.document else { return }
+            currentPageIndex.wrappedValue = document.index(for: page)
         }
     }
 }
@@ -493,6 +557,7 @@ struct ReaderView: View {
     @State private var currentMatchIndex = 0
     @State private var lastScrollGeometry: ScrollGeometry?
     @State private var isHoveringTop = false
+    @State private var currentPDFPage = 0
 
     private var theme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
@@ -533,75 +598,84 @@ struct ReaderView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ProgressView(value: scrollProgress)
-                .progressViewStyle(.linear)
-                .tint(.accentColor)
-                .frame(height: 2)
-                .opacity(scrollProgress > 0 ? 1 : 0)
-                .animation(.easeOut(duration: 0.2), value: scrollProgress)
+        ZStack(alignment: .top) {
+            if book.format == .pdf, let pdfData = book.pdfData {
+                PDFKitView(data: pdfData, currentPageIndex: $currentPDFPage)
+            } else {
+                VStack(spacing: 0) {
+                    ProgressView(value: scrollProgress)
+                        .progressViewStyle(.linear)
+                        .tint(.accentColor)
+                        .frame(height: 2)
+                        .opacity(scrollProgress > 0 ? 1 : 0)
+                        .animation(.easeOut(duration: 0.2), value: scrollProgress)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    Text(book.title)
-                        .font(.system(size: 26, weight: .bold, design: font.design))
-                        .foregroundStyle(theme.textColor)
-                        .padding(.bottom, 4)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 28) {
+                            Text(book.title)
+                                .font(.system(size: 26, weight: .bold, design: font.design))
+                                .foregroundStyle(theme.textColor)
+                                .padding(.bottom, 4)
 
-                    Text(attributedContent)
-                        .font(.system(size: fontSize, weight: .regular, design: font.design))
-                        .lineSpacing(fontSize * 0.5)
-                        .foregroundStyle(theme.textColor.opacity(0.9))
-                        .textSelection(.enabled)
-                }
-                .frame(maxWidth: 640, alignment: .leading)
-                .padding(.vertical, 64)
-                .padding(.horizontal, 40)
-                .frame(maxWidth: .infinity)
-            }
-            .scrollIndicators(.hidden)
-            .scrollPosition($scrollPosition)
-            .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
-                handleScrollChange(geometry)
-            }
-        }
-        .background(theme.backgroundColor)
-        .preferredColorScheme(theme.colorScheme)
-        .overlay(alignment: .top) {
-            if isFocusMode && isHoveringTop {
-                HStack {
-                    Spacer()
-                    Button {
-                        isFocusMode = false
-                    } label: {
-                        Image(systemName: "arrow.down.right.and.arrow.up.left")
-                            .foregroundStyle(.primary)
-                            .padding(10)
-                            .background(.thinMaterial, in: Circle())
-                            .overlay(
-                                Circle().strokeBorder(.primary.opacity(0.1), lineWidth: 1)
-                            )
+                            Text(attributedContent)
+                                .font(.system(size: fontSize, weight: .regular, design: font.design))
+                                .lineSpacing(fontSize * 0.5)
+                                .foregroundStyle(theme.textColor.opacity(0.9))
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxWidth: 640, alignment: .leading)
+                        .padding(.vertical, 64)
+                        .padding(.horizontal, 40)
+                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.top, 12)
-                    .padding(.trailing, 16)
+                    .scrollIndicators(.hidden)
+                    .scrollPosition($scrollPosition)
+                    .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
+                        handleScrollChange(geometry)
+                    }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .background(theme.backgroundColor)
+            }
+
+            if isFocusMode {
+                Color.clear
+                    .frame(height: 40)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isHoveringTop = hovering
+                        }
+                    }
+
+                if isHoveringTop {
+                    HStack {
+                        Spacer()
+                        Button {
+                            isFocusMode = false
+                        } label: {
+                            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                .foregroundStyle(.primary)
+                                .padding(10)
+                                .background(.thinMaterial, in: Circle())
+                                .overlay(
+                                    Circle().strokeBorder(.primary.opacity(0.1), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 12)
+                        .padding(.trailing, 16)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
-        .onContinuousHover { phase in
-            switch phase {
-            case .active(let location):
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isHoveringTop = isFocusMode && location.y < 80
-                }
-            case .ended:
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isHoveringTop = false
-                }
-            }
-        }
+        .preferredColorScheme(theme.colorScheme)
         .searchable(text: $searchText, isPresented: $isSearching, placement: .toolbar, prompt: "Поиск по книге")
+        .safeAreaInset(edge: .bottom) {
+            if !searchText.isEmpty {
+                searchResultsBar
+            }
+        }
         .onChange(of: searchText) {
             currentMatchIndex = 0
             scrollToCurrentMatch()
@@ -614,11 +688,6 @@ struct ReaderView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
             isSearching = true
-        }
-        .safeAreaInset(edge: .bottom) {
-            if !searchText.isEmpty {
-                searchResultsBar
-            }
         }
         .toolbar {
             ReaderToolbarContent(
@@ -799,7 +868,7 @@ struct ContentView: View {
         .toolbar(isFocusMode ? .hidden : .automatic, for: .windowToolbar)
         .fileImporter(
             isPresented: $isImporting,
-            allowedContentTypes: [.plainText, markdownType],
+            allowedContentTypes: [.plainText, markdownType, .pdf],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -896,18 +965,38 @@ struct ContentView: View {
             }
         }
 
+        let fileExtension = url.pathExtension.lowercased()
+        let title = url.deletingPathExtension().lastPathComponent
+
+        if fileExtension == "pdf" {
+            importPDF(from: url, title: title)
+        } else {
+            importPlainText(from: url, title: title, fileExtension: fileExtension)
+        }
+    }
+
+    private func importPlainText(from url: URL, title: String, fileExtension: String) {
         do {
             let content = try String(contentsOf: url, encoding: .utf8)
-            let title = url.deletingPathExtension().lastPathComponent
-            let fileExtension = url.pathExtension
-
-            let book = Book(title: title, content: content, fileExtension: fileExtension)
+            let format: BookFormat = fileExtension == "md" ? .markdown : .text
+            let book = Book(title: title, content: content, fileExtension: fileExtension, format: format)
             modelContext.insert(book)
-
             currentBook = book
             errorMessage = nil
         } catch {
             errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
+        }
+    }
+
+    private func importPDF(from url: URL, title: String) {
+        do {
+            let data = try Data(contentsOf: url)
+            let book = Book(title: title, content: "", fileExtension: "pdf", format: .pdf, pdfData: data)
+            modelContext.insert(book)
+            currentBook = book
+            errorMessage = nil
+        } catch {
+            errorMessage = "Не удалось прочитать PDF-файл."
         }
     }
     
