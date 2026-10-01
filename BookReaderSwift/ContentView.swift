@@ -297,6 +297,65 @@ struct ToolbarIconButton: View {
     }
 }
 
+struct ReaderToolbarContent: ToolbarContent {
+    let onClose: () -> Void
+    @Binding var isFocusMode: Bool
+    let onAddBookmark: () -> Void
+    @Binding var themeRawValue: String
+    @Binding var fontRawValue: String
+    let themeIcon: String
+    @Binding var fontSize: Double
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button(action: onClose) {
+                Label("К библиотеке", systemImage: "chevron.left")
+            }
+        }
+
+        ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarIconButton(
+                systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
+            ) {
+                isFocusMode.toggle()
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+
+            ToolbarIconButton(systemName: "bookmark", action: onAddBookmark)
+
+            Menu {
+                Picker("Тема", selection: $themeRawValue) {
+                    ForEach(ReadingTheme.allCases) { theme in
+                        Label(theme.displayName, systemImage: theme.iconName)
+                            .tag(theme.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
+
+                Picker("Шрифт", selection: $fontRawValue) {
+                    ForEach(ReadingFont.allCases) { font in
+                        Text(font.displayName)
+                            .tag(font.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Image(systemName: themeIcon)
+            }
+
+            ToolbarIconButton(systemName: "textformat.size.smaller") {
+                fontSize = max(13, fontSize - 1)
+            }
+            .disabled(fontSize <= 13)
+
+            ToolbarIconButton(systemName: "textformat.size.larger") {
+                fontSize = min(28, fontSize + 1)
+            }
+            .disabled(fontSize >= 28)
+        }
+    }
+}
+
 struct EmptyLibraryView: View {
     let errorMessage: String?
     let onOpenBook: () -> Void
@@ -520,46 +579,15 @@ struct ReaderView: View {
             }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                ToolbarIconButton(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
-                    isFocusMode.toggle()
-                }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-
-                ToolbarIconButton(systemName: "bookmark") {
-                    addBookmark()
-                }
-
-                Menu {
-                    Picker("Тема", selection: $themeRawValue) {
-                        ForEach(ReadingTheme.allCases) { theme in
-                            Label(theme.displayName, systemImage: theme.iconName)
-                                .tag(theme.rawValue)
-                        }
-                    }
-                    .pickerStyle(.inline)
-
-                    Picker("Шрифт", selection: $fontRawValue) {
-                        ForEach(ReadingFont.allCases) { font in
-                            Text(font.displayName)
-                                .tag(font.rawValue)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    Image(systemName: theme.iconName)
-                }
-
-                ToolbarIconButton(systemName: "textformat.size.smaller") {
-                    fontSize = max(13, fontSize - 1)
-                }
-                .disabled(fontSize <= 13)
-
-                ToolbarIconButton(systemName: "textformat.size.larger") {
-                    fontSize = min(28, fontSize + 1)
-                }
-                .disabled(fontSize >= 28)
-            }
+            ReaderToolbarContent(
+                onClose: onClose,
+                isFocusMode: $isFocusMode,
+                onAddBookmark: addBookmark,
+                themeRawValue: $themeRawValue,
+                fontRawValue: $fontRawValue,
+                themeIcon: theme.iconName,
+                fontSize: $fontSize
+            )
         }
     }
 
