@@ -91,6 +91,13 @@ enum ReadingTheme: String, CaseIterable, Identifiable {
         case .sepia: Color(red: 0.30, green: 0.22, blue: 0.13)
         }
     }
+    
+    var colorScheme: ColorScheme {
+        switch self {
+        case .light, .sepia: .light
+        case .dark: .dark
+        }
+    }
 }
 
 enum ReadingFont: String, CaseIterable, Identifiable {
@@ -285,8 +292,8 @@ struct ToolbarIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .foregroundStyle(isHovering ? .primary : .secondary)
-                .contentTransition(.symbolEffect)
+                .foregroundStyle(.primary)
+                .opacity(isHovering ? 1.0 : 0.65)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -485,6 +492,7 @@ struct ReaderView: View {
     @State private var isSearching = false
     @State private var currentMatchIndex = 0
     @State private var lastScrollGeometry: ScrollGeometry?
+    @State private var isHoveringTop = false
 
     private var theme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
@@ -558,7 +566,41 @@ struct ReaderView: View {
             }
         }
         .background(theme.backgroundColor)
-        .background(theme.backgroundColor)
+        .preferredColorScheme(theme.colorScheme)
+        .overlay(alignment: .top) {
+            if isFocusMode && isHoveringTop {
+                HStack {
+                    Spacer()
+                    Button {
+                        isFocusMode = false
+                    } label: {
+                        Image(systemName: "arrow.down.right.and.arrow.up.left")
+                            .foregroundStyle(.primary)
+                            .padding(10)
+                            .background(.thinMaterial, in: Circle())
+                            .overlay(
+                                Circle().strokeBorder(.primary.opacity(0.1), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 12)
+                    .padding(.trailing, 16)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location):
+                withAnimation(.easeOut(duration: 0.15)) {
+                    isHoveringTop = isFocusMode && location.y < 80
+                }
+            case .ended:
+                withAnimation(.easeOut(duration: 0.15)) {
+                    isHoveringTop = false
+                }
+            }
+        }
         .searchable(text: $searchText, isPresented: $isSearching, placement: .toolbar, prompt: "Поиск по книге")
         .onChange(of: searchText) {
             currentMatchIndex = 0
