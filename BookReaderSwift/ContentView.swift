@@ -60,6 +60,34 @@ struct ZipArchive {
         return nil
     }
     
+    private func extract(_ entry: ZipEntry) throws -> Data {
+        guard Int(entry.localHeaderOffset) + 30 <= data.count else {
+            throw ZipArchiveError.invalidArchive
+        }
+
+        let localHeader = data[Int(entry.localHeaderOffset)...]
+        guard localHeader.readUInt32(at: 0) == 0x04034b50 else {
+            throw ZipArchiveError.invalidArchive
+        }
+
+        let nameLength = Int(localHeader.readUInt16(at: 26))
+        let extraLength = Int(localHeader.readUInt16(at: 28))
+        let dataStart = Int(entry.localHeaderOffset) + 30 + nameLength + extraLength
+        let dataEnd = dataStart + Int(entry.compressedSize)
+
+        guard dataEnd <= data.count else { throw ZipArchiveError.invalidArchive }
+        let compressedData = data[dataStart..<dataEnd]
+
+        switch entry.compressionMethod {
+        case 0:
+            return Data(compressedData)
+        case 8:
+            return try inflate(compressedData, uncompressedSize: Int(entry.uncompressedSize))
+        default:
+            throw ZipArchiveError.decompressionFailed
+        }
+    }
+    
     private func inflate(_ compressed: Data, uncompressedSize: Int) throws -> Data {
         guard uncompressedSize > 0 else { return Data() }
 
