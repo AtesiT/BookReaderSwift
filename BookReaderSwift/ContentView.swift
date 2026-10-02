@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 import PDFKit
+import Compression
 
 extension Notification.Name {
     static let openBookRequested = Notification.Name("openBookRequested")
@@ -14,6 +15,49 @@ enum BookFormat: String, Codable {
     case text
     case markdown
     case pdf
+}
+
+struct ZipEntry {
+    let name: String
+    let compressionMethod: UInt16
+    let compressedSize: UInt32
+    let uncompressedSize: UInt32
+    let localHeaderOffset: UInt32
+}
+
+enum ZipArchiveError: Error {
+    case invalidArchive
+    case entryNotFound
+    case decompressionFailed
+}
+
+struct ZipArchive {
+    private let data: Data
+    private let entries: [String: ZipEntry]
+
+    func contains(_ path: String) -> Bool {
+        entries[path] != nil
+    }
+
+    func fileNames() -> [String] {
+        Array(entries.keys)
+    }
+}
+
+private extension Data {
+    func readUInt16(at offset: Int) -> UInt16 {
+        let start = self.startIndex + offset
+        return UInt16(self[start]) | (UInt16(self[start + 1]) << 8)
+    }
+
+    func readUInt32(at offset: Int) -> UInt32 {
+        let start = self.startIndex + offset
+        var value: UInt32 = 0
+        for i in 0..<4 {
+            value |= UInt32(self[start + i]) << (8 * i)
+        }
+        return value
+    }
 }
 
 @Model
