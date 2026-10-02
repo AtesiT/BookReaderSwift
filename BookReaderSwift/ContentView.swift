@@ -35,6 +35,10 @@ struct ZipArchive {
     private let data: Data
     private let entries: [String: ZipEntry]
 
+    init(data: Data) throws {
+        self.data = data
+        self.entries = try ZipArchive.parseCentralDirectory(data: data)
+    }
 
     func contains(_ path: String) -> Bool {
         entries[path] != nil
@@ -42,6 +46,57 @@ struct ZipArchive {
 
     func fileNames() -> [String] {
         Array(entries.keys)
+    }
+
+    func data(for path: String) throws -> Data {
+        guard let entry = entries[path] else {
+            throw ZipArchiveError.entryNotFound
+        }
+        return try extract(entry)
+    }
+
+    private static func parseCentralDirectory(data: Data) throws -> [String: ZipEntry] {
+        guard let eocdOffset = findEndOfCentralDirectory(data: data) else {
+            throw ZipArchiveError.invalidArchive
+        }
+
+        let eocd = data[eocdOffset...]
+        let centralDirOffset = eocd.readUInt32(at: 16)
+        let entryCount = eocd.readUInt16(at: 10)
+
+        var entries: [String: ZipEntry] = [:]
+        var cursor = Int(centralDirOffset)
+
+        for _ in 0..<entryCount {
+            guard cursor + 46 <= data.count else { break }
+            let header = data[cursor...]
+            guard header.readUInt32(at: 0) == 0x02014b50 else { break }
+
+            let compressionMethod = header.readUInt16(at: 10)
+            let compressedSize = header.readUInt32(at: 20)
+            let uncompressedSize = header.readUInt32(at: 24)
+            let nameLength = Int(header.readUInt16(at: 28))
+            let extraLength = Int(header.readUInt16(at: 30))
+            let commentLength = Int(header.readUInt16(at: 32))
+            let localHeaderOffset = header.readUInt32(at: 42)
+
+            let nameStart = cursor + 46
+            guard nameStart + nameLength <= data.count else { break }
+            let nameData = data[nameStart..<(nameStart + nameLength)]
+            let name = String(data: nameData, encoding: .utf8) ?? ""
+
+            entries[name] = ZipEntry(
+                name: name,
+                compressionMethod: compressionMethod,
+                compressedSize: compressedSize,
+                uncompressedSize: uncompressedSize,
+                localHeaderOffset: localHeaderOffset
+            )
+
+            cursor = nameStart + nameLength + extraLength + commentLength
+        }
+
+        return entries
     }
 
     private static func findEndOfCentralDirectory(data: Data) -> Int? {
@@ -59,7 +114,7 @@ struct ZipArchive {
         }
         return nil
     }
-    
+
     private func extract(_ entry: ZipEntry) throws -> Data {
         guard Int(entry.localHeaderOffset) + 30 <= data.count else {
             throw ZipArchiveError.invalidArchive
@@ -87,7 +142,7 @@ struct ZipArchive {
             throw ZipArchiveError.decompressionFailed
         }
     }
-    
+
     private func inflate(_ compressed: Data, uncompressedSize: Int) throws -> Data {
         guard uncompressedSize > 0 else { return Data() }
 
@@ -129,6 +184,7 @@ private extension Data {
         return value
     }
 }
+
 @Model
 final class Book {
     var title: String
