@@ -59,6 +59,31 @@ struct ZipArchive {
         }
         return nil
     }
+    
+    private func inflate(_ compressed: Data, uncompressedSize: Int) throws -> Data {
+        guard uncompressedSize > 0 else { return Data() }
+
+        var result = Data(count: uncompressedSize)
+        let decodedCount = result.withUnsafeMutableBytes { destBuffer -> Int in
+            compressed.withUnsafeBytes { srcBuffer -> Int in
+                guard let destPointer = destBuffer.bindMemory(to: UInt8.self).baseAddress,
+                      let srcPointer = srcBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                    return 0
+                }
+                return compression_decode_buffer(
+                    destPointer, uncompressedSize,
+                    srcPointer, compressed.count,
+                    nil, COMPRESSION_ZLIB
+                )
+            }
+        }
+
+        guard decodedCount == uncompressedSize else {
+            throw ZipArchiveError.decompressionFailed
+        }
+
+        return result
+    }
 }
 
 private extension Data {
