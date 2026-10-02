@@ -35,12 +35,29 @@ struct ZipArchive {
     private let data: Data
     private let entries: [String: ZipEntry]
 
+
     func contains(_ path: String) -> Bool {
         entries[path] != nil
     }
 
     func fileNames() -> [String] {
         Array(entries.keys)
+    }
+
+    private static func findEndOfCentralDirectory(data: Data) -> Int? {
+        guard data.count >= 22 else { return nil }
+        let signature: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
+        let searchFloor = max(0, data.count - 65557)
+        var i = data.count - 4
+
+        while i >= searchFloor {
+            if data[i] == signature[0], data[i + 1] == signature[1],
+               data[i + 2] == signature[2], data[i + 3] == signature[3] {
+                return i
+            }
+            i -= 1
+        }
+        return nil
     }
 }
 
@@ -59,7 +76,6 @@ private extension Data {
         return value
     }
 }
-
 @Model
 final class Book {
     var title: String
