@@ -142,17 +142,21 @@ enum ReadingFont: String, CaseIterable, Identifiable {
 
 struct PDFKitView: NSViewRepresentable {
     let data: Data
-    @Binding var currentPageIndex: Int
+    let initialProgress: Double
+    let onPageChanged: (Int, Int) -> Void
 
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
         view.autoScales = true
         view.displayMode = .singlePageContinuous
-        view.document = PDFDocument(data: data)
+        let document = PDFDocument(data: data)
+        view.document = document
 
-        if let document = view.document, currentPageIndex < document.pageCount,
-           let page = document.page(at: currentPageIndex) {
-            view.go(to: page)
+        if let document, document.pageCount > 0, initialProgress > 0 {
+            let targetIndex = Int(initialProgress * Double(document.pageCount - 1))
+            if let page = document.page(at: targetIndex) {
+                view.go(to: page)
+            }
         }
 
         context.coordinator.pdfView = view
@@ -169,21 +173,21 @@ struct PDFKitView: NSViewRepresentable {
     func updateNSView(_ nsView: PDFView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(currentPageIndex: $currentPageIndex)
+        Coordinator(onPageChanged: onPageChanged)
     }
 
     final class Coordinator: NSObject {
         weak var pdfView: PDFView?
-        var currentPageIndex: Binding<Int>
+        let onPageChanged: (Int, Int) -> Void
 
-        init(currentPageIndex: Binding<Int>) {
-            self.currentPageIndex = currentPageIndex
+        init(onPageChanged: @escaping (Int, Int) -> Void) {
+            self.onPageChanged = onPageChanged
         }
 
         @objc func pageChanged() {
             guard let pdfView, let page = pdfView.currentPage,
                   let document = pdfView.document else { return }
-            currentPageIndex.wrappedValue = document.index(for: page)
+            onPageChanged(document.index(for: page), document.pageCount)
         }
     }
 }
@@ -558,7 +562,8 @@ struct ReaderView: View {
     @State private var lastScrollGeometry: ScrollGeometry?
     @State private var isHoveringTop = false
     @State private var currentPDFPage = 0
-
+    @State private var hasRestoredPDFPosition = false
+    
     private var theme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
     }
@@ -600,7 +605,12 @@ struct ReaderView: View {
     var body: some View {
         ZStack(alignment: .top) {
             if book.format == .pdf, let pdfData = book.pdfData {
-                PDFKitView(data: pdfData, currentPageIndex: $currentPDFPage)
+                PDFKitView(
+                    data: pdfData,
+                    initialProgress: initialScrollOverride ?? book.readingSession?.scrollOffset ?? 0
+                ) { page, pageCount in
+                    savePDFProgress(page: page, pageCount: pageCount)
+                }
             } else {
                 VStack(spacing: 0) {
                     ProgressView(value: scrollProgress)
@@ -776,6 +786,29 @@ struct ReaderView: View {
     }
 
     private func saveProgress(_ progress: Double) {
+        if let session = book.readingSession {
+            session.scrollOffset = progress
+            session.lastOpened = .now
+        } else {
+            book.readingSession = ReadingSession(scrollOffset: progress)
+        }
+    }
+    
+    private func restorePDFProgress() {
+        guard !hasRestoredPDFPosition else { return }
+        hasRestoredPDFPosition = true
+
+        if let override = initialScrollOverride {
+            currentPDFPage = Int(override * 1000)
+        } else if let savedProgress = book.readingSession?.scrollOffset, savedProgress > 0 {
+            currentPDFPage = Int(savedProgress * 1000)
+        }
+    }
+
+    private func savePDFProgress(page: Int, pageCount: Int) {
+        guard pageCount > 0 else { return }
+        let progress = Double(page) / Double(max(pageCount - 1, 1))
+
         if let session = book.readingSession {
             session.scrollOffset = progress
             session.lastOpened = .now
