@@ -185,6 +185,17 @@ private extension Data {
     }
 }
 
+struct EPUBDocument {
+    let title: String
+    let content: String
+}
+
+enum EPUBParserError: Error {
+    case missingContainer
+    case missingOPF
+    case invalidStructure
+}
+
 @Model
 final class Book {
     var title: String
