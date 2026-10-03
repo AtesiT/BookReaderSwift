@@ -196,6 +196,21 @@ enum EPUBParserError: Error {
     case invalidStructure
 }
 
+private final class ContainerXMLDelegate: NSObject, XMLParserDelegate {
+    var opfPath: String?
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String]
+    ) {
+        if elementName == "rootfile" {
+            opfPath = attributeDict["full-path"]
+        }
+    }
+}
 
 private final class OPFXMLDelegate: NSObject, XMLParserDelegate {
     var manifest: [String: String] = [:]
