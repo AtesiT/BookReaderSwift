@@ -196,6 +196,61 @@ enum EPUBParserError: Error {
     case invalidStructure
 }
 
+
+private final class OPFXMLDelegate: NSObject, XMLParserDelegate {
+    var manifest: [String: String] = [:]
+    var spineOrder: [String] = []
+    var title: String?
+
+    private var isInsideTitle = false
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String]
+    ) {
+        let tag = stripNamespace(elementName)
+
+        switch tag {
+        case "item":
+            if let id = attributeDict["id"], let href = attributeDict["href"] {
+                manifest[id] = href
+            }
+        case "itemref":
+            if let idref = attributeDict["idref"] {
+                spineOrder.append(idref)
+            }
+        case "title":
+            isInsideTitle = true
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard isInsideTitle else { return }
+        title = (title ?? "") + string
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        guard stripNamespace(elementName) == "title" else { return }
+        isInsideTitle = false
+        title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func stripNamespace(_ name: String) -> String {
+        guard let colonRange = name.range(of: ":") else { return name }
+        return String(name[colonRange.upperBound...])
+    }
+}
+
 @Model
 final class Book {
     var title: String
