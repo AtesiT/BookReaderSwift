@@ -197,6 +197,21 @@ enum EPUBParserError: Error {
 }
 
 struct EPUBParser {
+    private static func extractOPFPath(from data: Data) -> String? {
+        let delegate = ContainerXMLDelegate()
+        let xmlParser = XMLParser(data: data)
+        xmlParser.delegate = delegate
+        xmlParser.parse()
+        return delegate.opfPath
+    }
+
+    private static func parseOPF(data: Data) -> (manifest: [String: String], spine: [String], title: String?) {
+        let delegate = OPFXMLDelegate()
+        let xmlParser = XMLParser(data: data)
+        xmlParser.delegate = delegate
+        xmlParser.parse()
+        return (delegate.manifest, delegate.spineOrder, delegate.title)
+    }
 
     private static func htmlToPlainText(_ html: String) -> String {
         var text = html
