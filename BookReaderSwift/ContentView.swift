@@ -15,6 +15,7 @@ enum BookFormat: String, Codable {
     case text
     case markdown
     case pdf
+    case epub
 }
 
 struct ZipEntry {
@@ -355,6 +356,7 @@ final class Book {
     var fileExtension: String
     var formatRawValue: String
     var pdfData: Data?
+    var epubData: Data?
 
     @Relationship(deleteRule: .cascade)
     var readingSession: ReadingSession?
@@ -364,16 +366,23 @@ final class Book {
         set { formatRawValue = newValue.rawValue }
     }
 
-    init(title: String, content: String, fileExtension: String, format: BookFormat, pdfData: Data? = nil) {
+    init(
+        title: String,
+        content: String,
+        fileExtension: String,
+        format: BookFormat,
+        pdfData: Data? = nil,
+        epubData: Data? = nil
+    ) {
         self.title = title
         self.content = content
         self.dateAdded = .now
         self.fileExtension = fileExtension
         self.formatRawValue = format.rawValue
         self.pdfData = pdfData
+        self.epubData = epubData
     }
 }
-
 @Model
 final class ReadingSession {
     var scrollOffset: Double
@@ -711,6 +720,7 @@ struct ReaderToolbarContent: ToolbarContent {
     @Binding var fontRawValue: String
     let themeIcon: String
     @Binding var fontSize: Double
+    let showsTextControls: Bool
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
@@ -729,35 +739,37 @@ struct ReaderToolbarContent: ToolbarContent {
 
             ToolbarIconButton(systemName: "bookmark", action: onAddBookmark)
 
-            Menu {
-                Picker("Тема", selection: $themeRawValue) {
-                    ForEach(ReadingTheme.allCases) { theme in
-                        Label(theme.displayName, systemImage: theme.iconName)
-                            .tag(theme.rawValue)
+            if showsTextControls {
+                Menu {
+                    Picker("Тема", selection: $themeRawValue) {
+                        ForEach(ReadingTheme.allCases) { theme in
+                            Label(theme.displayName, systemImage: theme.iconName)
+                                .tag(theme.rawValue)
+                        }
                     }
-                }
-                .pickerStyle(.inline)
+                    .pickerStyle(.inline)
 
-                Picker("Шрифт", selection: $fontRawValue) {
-                    ForEach(ReadingFont.allCases) { font in
-                        Text(font.displayName)
-                            .tag(font.rawValue)
+                    Picker("Шрифт", selection: $fontRawValue) {
+                        ForEach(ReadingFont.allCases) { font in
+                            Text(font.displayName)
+                                .tag(font.rawValue)
+                        }
                     }
+                    .pickerStyle(.inline)
+                } label: {
+                    Image(systemName: themeIcon)
                 }
-                .pickerStyle(.inline)
-            } label: {
-                Image(systemName: themeIcon)
-            }
 
-            ToolbarIconButton(systemName: "textformat.size.smaller") {
-                fontSize = max(13, fontSize - 1)
-            }
-            .disabled(fontSize <= 13)
+                ToolbarIconButton(systemName: "textformat.size.smaller") {
+                    fontSize = max(13, fontSize - 1)
+                }
+                .disabled(fontSize <= 13)
 
-            ToolbarIconButton(systemName: "textformat.size.larger") {
-                fontSize = min(28, fontSize + 1)
+                ToolbarIconButton(systemName: "textformat.size.larger") {
+                    fontSize = min(28, fontSize + 1)
+                }
+                .disabled(fontSize >= 28)
             }
-            .disabled(fontSize >= 28)
         }
     }
 }
@@ -880,21 +892,21 @@ struct ReaderView: View {
     var initialScrollOverride: Double?
     @Binding var isFocusMode: Bool
     let onClose: () -> Void
-    
+
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
     @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
+
     @State private var fontSize: Double = 17
     @State private var scrollProgress: Double = 0
     @State private var scrollPosition = ScrollPosition()
     @State private var hasRestoredPosition = false
+
     @State private var searchText = ""
     @State private var isSearching = false
     @State private var currentMatchIndex = 0
     @State private var lastScrollGeometry: ScrollGeometry?
     @State private var isHoveringTop = false
-    @State private var currentPDFPage = 0
-    @State private var hasRestoredPDFPosition = false
-    
+
     private var theme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
     }
@@ -902,7 +914,7 @@ struct ReaderView: View {
     private var font: ReadingFont {
         ReadingFont(rawValue: fontRawValue) ?? .serif
     }
-    
+
     private var searchMatches: [Range<String.Index>] {
         guard !searchText.isEmpty else { return [] }
         var matches: [Range<String.Index>] = []
@@ -917,7 +929,7 @@ struct ReaderView: View {
         }
         return matches
     }
-    
+
     private var attributedContent: AttributedString {
         var attributed = AttributedString(book.content)
 
@@ -934,83 +946,92 @@ struct ReaderView: View {
     }
 
     var body: some View {
+        Group {
+            if book.format == .pdf {
+                pdfReaderBody
+            } else {
+                textReaderBody
+            }
+        }
+        .preferredColorScheme(theme.colorScheme)
+        .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
+            fontSize = min(28, fontSize + 1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .decreaseFontSizeRequested)) { _ in
+            fontSize = max(13, fontSize - 1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
+            if book.format != .pdf {
+                isSearching = true
+            }
+        }
+        .toolbar {
+            ReaderToolbarContent(
+                onClose: onClose,
+                isFocusMode: $isFocusMode,
+                onAddBookmark: addBookmark,
+                themeRawValue: $themeRawValue,
+                fontRawValue: $fontRawValue,
+                themeIcon: theme.iconName,
+                fontSize: $fontSize,
+                showsTextControls: book.format != .pdf
+            )
+        }
+    }
+
+    private var pdfReaderBody: some View {
         ZStack(alignment: .top) {
-            if book.format == .pdf, let pdfData = book.pdfData {
+            if let pdfData = book.pdfData {
                 PDFKitView(
                     data: pdfData,
                     initialProgress: initialScrollOverride ?? book.readingSession?.scrollOffset ?? 0
                 ) { page, pageCount in
                     savePDFProgress(page: page, pageCount: pageCount)
                 }
-            } else {
-                VStack(spacing: 0) {
-                    ProgressView(value: scrollProgress)
-                        .progressViewStyle(.linear)
-                        .tint(.accentColor)
-                        .frame(height: 2)
-                        .opacity(scrollProgress > 0 ? 1 : 0)
-                        .animation(.easeOut(duration: 0.2), value: scrollProgress)
-
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 28) {
-                            Text(book.title)
-                                .font(.system(size: 26, weight: .bold, design: font.design))
-                                .foregroundStyle(theme.textColor)
-                                .padding(.bottom, 4)
-
-                            Text(attributedContent)
-                                .font(.system(size: fontSize, weight: .regular, design: font.design))
-                                .lineSpacing(fontSize * 0.5)
-                                .foregroundStyle(theme.textColor.opacity(0.9))
-                                .textSelection(.enabled)
-                        }
-                        .frame(maxWidth: 640, alignment: .leading)
-                        .padding(.vertical, 64)
-                        .padding(.horizontal, 40)
-                        .frame(maxWidth: .infinity)
-                    }
-                    .scrollIndicators(.hidden)
-                    .scrollPosition($scrollPosition)
-                    .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
-                        handleScrollChange(geometry)
-                    }
-                }
-                .background(theme.backgroundColor)
             }
 
-            if isFocusMode {
-                Color.clear
-                    .frame(height: 40)
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isHoveringTop = hovering
-                        }
-                    }
-
-                if isHoveringTop {
-                    HStack {
-                        Spacer()
-                        Button {
-                            isFocusMode = false
-                        } label: {
-                            Image(systemName: "arrow.down.right.and.arrow.up.left")
-                                .foregroundStyle(.primary)
-                                .padding(10)
-                                .background(.thinMaterial, in: Circle())
-                                .overlay(
-                                    Circle().strokeBorder(.primary.opacity(0.1), lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 12)
-                        .padding(.trailing, 16)
-                    }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
+            focusModeOverlay
         }
-        .preferredColorScheme(theme.colorScheme)
+    }
+
+    private var textReaderBody: some View {
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                ProgressView(value: scrollProgress)
+                    .progressViewStyle(.linear)
+                    .tint(.accentColor)
+                    .frame(height: 2)
+                    .opacity(scrollProgress > 0 ? 1 : 0)
+                    .animation(.easeOut(duration: 0.2), value: scrollProgress)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        Text(book.title)
+                            .font(.system(size: 26, weight: .bold, design: font.design))
+                            .foregroundStyle(theme.textColor)
+                            .padding(.bottom, 4)
+
+                        Text(attributedContent)
+                            .font(.system(size: fontSize, weight: .regular, design: font.design))
+                            .lineSpacing(fontSize * 0.5)
+                            .foregroundStyle(theme.textColor.opacity(0.9))
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: 640, alignment: .leading)
+                    .padding(.vertical, 64)
+                    .padding(.horizontal, 40)
+                    .frame(maxWidth: .infinity)
+                }
+                .scrollIndicators(.hidden)
+                .scrollPosition($scrollPosition)
+                .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
+                    handleScrollChange(geometry)
+                }
+            }
+            .background(theme.backgroundColor)
+
+            focusModeOverlay
+        }
         .searchable(text: $searchText, isPresented: $isSearching, placement: .toolbar, prompt: "Поиск по книге")
         .safeAreaInset(edge: .bottom) {
             if !searchText.isEmpty {
@@ -1021,25 +1042,40 @@ struct ReaderView: View {
             currentMatchIndex = 0
             scrollToCurrentMatch()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
-            fontSize = min(28, fontSize + 1)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .decreaseFontSizeRequested)) { _ in
-            fontSize = max(13, fontSize - 1)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
-            isSearching = true
-        }
-        .toolbar {
-            ReaderToolbarContent(
-                onClose: onClose,
-                isFocusMode: $isFocusMode,
-                onAddBookmark: addBookmark,
-                themeRawValue: $themeRawValue,
-                fontRawValue: $fontRawValue,
-                themeIcon: theme.iconName,
-                fontSize: $fontSize
-            )
+    }
+
+    @ViewBuilder
+    private var focusModeOverlay: some View {
+        if isFocusMode {
+            Color.clear
+                .frame(height: 40)
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isHoveringTop = hovering
+                    }
+                }
+
+            if isHoveringTop {
+                HStack {
+                    Spacer()
+                    Button {
+                        isFocusMode = false
+                    } label: {
+                        Image(systemName: "arrow.down.right.and.arrow.up.left")
+                            .foregroundStyle(.primary)
+                            .padding(10)
+                            .background(.thinMaterial, in: Circle())
+                            .overlay(
+                                Circle().strokeBorder(.primary.opacity(0.1), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 12)
+                    .padding(.trailing, 16)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
     }
 
@@ -1094,7 +1130,7 @@ struct ReaderView: View {
 
         scrollPosition.scrollTo(y: progress * maxOffset)
     }
-    
+
     private func handleScrollChange(_ geometry: ScrollGeometry) {
         lastScrollGeometry = geometry
 
@@ -1122,17 +1158,6 @@ struct ReaderView: View {
             session.lastOpened = .now
         } else {
             book.readingSession = ReadingSession(scrollOffset: progress)
-        }
-    }
-    
-    private func restorePDFProgress() {
-        guard !hasRestoredPDFPosition else { return }
-        hasRestoredPDFPosition = true
-
-        if let override = initialScrollOverride {
-            currentPDFPage = Int(override * 1000)
-        } else if let savedProgress = book.readingSession?.scrollOffset, savedProgress > 0 {
-            currentPDFPage = Int(savedProgress * 1000)
         }
     }
 
@@ -1186,6 +1211,10 @@ struct ContentView: View {
     private var markdownType: UTType {
         UTType(filenameExtension: "md") ?? .plainText
     }
+    
+    private var epubType: UTType {
+        UTType(filenameExtension: "epub") ?? UTType(importedAs: "org.idpf.epub-container")
+    }
 
     private let gridColumns = [
         GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)
@@ -1232,7 +1261,7 @@ struct ContentView: View {
         .toolbar(isFocusMode ? .hidden : .automatic, for: .windowToolbar)
         .fileImporter(
             isPresented: $isImporting,
-            allowedContentTypes: [.plainText, markdownType, .pdf],
+            allowedContentTypes: [.plainText, markdownType, .pdf, epubType],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -1332,13 +1361,16 @@ struct ContentView: View {
         let fileExtension = url.pathExtension.lowercased()
         let title = url.deletingPathExtension().lastPathComponent
 
-        if fileExtension == "pdf" {
+        switch fileExtension {
+        case "pdf":
             importPDF(from: url, title: title)
-        } else {
+        case "epub":
+            importEPUB(from: url, title: title)
+        default:
             importPlainText(from: url, title: title, fileExtension: fileExtension)
         }
     }
-
+    
     private func importPlainText(from url: URL, title: String, fileExtension: String) {
         do {
             let content = try String(contentsOf: url, encoding: .utf8)
@@ -1361,6 +1393,30 @@ struct ContentView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Не удалось прочитать PDF-файл."
+        }
+    }
+    
+    private func importEPUB(from url: URL, title: String) {
+        do {
+            let rawData = try Data(contentsOf: url)
+            let document = try EPUBParser.parse(data: rawData)
+
+            let resolvedTitle = document.title.isEmpty || document.title == "Без названия"
+                ? title
+                : document.title
+
+            let book = Book(
+                title: resolvedTitle,
+                content: document.content,
+                fileExtension: "epub",
+                format: .epub,
+                epubData: rawData
+            )
+            modelContext.insert(book)
+            currentBook = book
+            errorMessage = nil
+        } catch {
+            errorMessage = "Не удалось разобрать EPUB-файл. Возможно, он повреждён или использует нестандартную структуру."
         }
     }
     
