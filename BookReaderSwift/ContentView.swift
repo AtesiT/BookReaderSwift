@@ -197,6 +197,40 @@ enum EPUBParserError: Error {
 }
 
 struct EPUBParser {
+    static func parse(data: Data) throws -> EPUBDocument {
+        let archive = try ZipArchive(data: data)
+
+        guard archive.contains("META-INF/container.xml") else {
+            throw EPUBParserError.missingContainer
+        }
+        let containerData = try archive.data(for: "META-INF/container.xml")
+
+        guard let opfPath = extractOPFPath(from: containerData) else {
+            throw EPUBParserError.missingOPF
+        }
+
+        let opfData = try archive.data(for: opfPath)
+        let basePath = (opfPath as NSString).deletingLastPathComponent
+
+        let (manifest, spineOrder, parsedTitle) = parseOPF(data: opfData)
+
+        var combinedText = ""
+        for itemID in spineOrder {
+            guard let href = manifest[itemID] else { continue }
+            let fullPath = basePath.isEmpty ? href : "\(basePath)/\(href)"
+
+            guard let chapterData = try? archive.data(for: fullPath),
+                  let html = String(data: chapterData, encoding: .utf8) else { continue }
+
+            combinedText += htmlToPlainText(html) + "\n\n"
+        }
+
+        let trimmed = combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw EPUBParserError.invalidStructure }
+
+        return EPUBDocument(title: parsedTitle ?? "Без названия", content: trimmed)
+    }
+
     private static func extractOPFPath(from data: Data) -> String? {
         let delegate = ContainerXMLDelegate()
         let xmlParser = XMLParser(data: data)
