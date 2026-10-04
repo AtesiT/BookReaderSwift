@@ -196,6 +196,38 @@ enum EPUBParserError: Error {
     case invalidStructure
 }
 
+struct EPUBParser {
+
+    private static func htmlToPlainText(_ html: String) -> String {
+        var text = html
+
+        let blockTags = [
+            "</p>", "<br>", "<br/>", "<br />",
+            "</div>", "</li>",
+            "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>"
+        ]
+        for tag in blockTags {
+            text = text.replacingOccurrences(of: tag, with: "\n", options: .caseInsensitive)
+        }
+
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+
+        let entities: [String: String] = [
+            "&amp;": "&", "&lt;": "<", "&gt;": ">",
+            "&quot;": "\"", "&#39;": "'", "&nbsp;": " "
+        ]
+        for (entity, replacement) in entities {
+            text = text.replacingOccurrences(of: entity, with: replacement)
+        }
+
+        while text.contains("\n\n\n") {
+            text = text.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 private final class ContainerXMLDelegate: NSObject, XMLParserDelegate {
     var opfPath: String?
 
