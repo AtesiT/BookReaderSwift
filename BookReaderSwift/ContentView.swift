@@ -1207,6 +1207,7 @@ struct ContentView: View {
     @State private var sidebarSelection: String? = "library"
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var isFocusMode = false
+    @State private var isProcessingImport = false
     
     private var markdownType: UTType {
         UTType(filenameExtension: "md") ?? .plainText
@@ -1279,6 +1280,25 @@ struct ContentView: View {
         .onChange(of: isFocusMode) { _, newValue in
             withAnimation(.easeInOut(duration: 0.25)) {
                 columnVisibility = newValue ? .detailOnly : .automatic
+            }
+        }
+        .overlay {
+            if isProcessingImport {
+                ZStack {
+                    Color.black.opacity(0.25)
+                        .ignoresSafeArea()
+
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text("Обрабатываем книгу…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                }
+                .transition(.opacity)
             }
         }
     }
