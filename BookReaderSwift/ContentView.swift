@@ -198,6 +198,8 @@ enum EPUBParserError: Error {
 }
 
 struct EPUBParser {
+    private static let tagRegex = try! NSRegularExpression(pattern: "<[^>]+>")
+    
     static func parse(data: Data) throws -> EPUBDocument {
         let archive = try ZipArchive(data: data)
 
@@ -260,7 +262,8 @@ struct EPUBParser {
             text = text.replacingOccurrences(of: tag, with: "\n", options: .caseInsensitive)
         }
 
-        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        text = tagRegex.stringByReplacingMatches(in: text, range: fullRange, withTemplate: "")
 
         let entities: [String: String] = [
             "&amp;": "&", "&lt;": "<", "&gt;": ">",
@@ -1417,26 +1420,47 @@ struct ContentView: View {
     }
     
     private func importEPUB(from url: URL, title: String) {
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+
+        let rawData: Data
         do {
-            let rawData = try Data(contentsOf: url)
-            let document = try EPUBParser.parse(data: rawData)
-
-            let resolvedTitle = document.title.isEmpty || document.title == "Без названия"
-                ? title
-                : document.title
-
-            let book = Book(
-                title: resolvedTitle,
-                content: document.content,
-                fileExtension: "epub",
-                format: .epub,
-                epubData: rawData
-            )
-            modelContext.insert(book)
-            currentBook = book
-            errorMessage = nil
+            rawData = try Data(contentsOf: url)
         } catch {
-            errorMessage = "Не удалось разобрать EPUB-файл. Возможно, он повреждён или использует нестандартную структуру."
+            if didStartAccessing { url.stopAccessingSecurityScopedResource() }
+            errorMessage = "Не удалось прочитать EPUB-файл."
+            return
+        }
+
+        if didStartAccessing { url.stopAccessingSecurityScopedResource() }
+
+        isProcessingImport = true
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                let document = try EPUBParser.parse(data: rawData)
+                await MainActor.run {
+                    let resolvedTitle = document.title.isEmpty || document.title == "Без названия"
+                        ? title
+                        : document.title
+
+                    let book = Book(
+                        title: resolvedTitle,
+                        content: document.content,
+                        fileExtension: "epub",
+                        format: .epub,
+                        epubData: rawData
+                    )
+                    modelContext.insert(book)
+                    currentBook = book
+                    errorMessage = nil
+                    isProcessingImport = false
+                }
+            } catch {
+                await MainActor.run {
+                    isProcessingImport = false
+                    errorMessage = "Не удалось разобрать EPUB-файл. Возможно, он повреждён или использует нестандартную структуру."
+                }
+            }
         }
     }
     
