@@ -26,10 +26,20 @@ struct ZipEntry {
     let localHeaderOffset: UInt32
 }
 
-enum ZipArchiveError: Error {
+enum ZipArchiveError: Error, LocalizedError {
     case invalidArchive
     case entryNotFound
     case decompressionFailed
+    case implausibleEntrySize
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidArchive: "Архив повреждён или имеет неподдерживаемую структуру"
+        case .entryNotFound: "Файл внутри архива не найден"
+        case .decompressionFailed: "Не удалось распаковать содержимое"
+        case .implausibleEntrySize: "Обнаружен файл подозрительно большого размера внутри архива"
+        }
+    }
 }
 
 struct ZipArchive {
@@ -1420,24 +1430,20 @@ struct ContentView: View {
     }
     
     private func importEPUB(from url: URL, title: String) {
-        let didStartAccessing = url.startAccessingSecurityScopedResource()
-
-        let rawData: Data
-        do {
-            rawData = try Data(contentsOf: url)
-        } catch {
-            if didStartAccessing { url.stopAccessingSecurityScopedResource() }
-            errorMessage = "Не удалось прочитать EPUB-файл."
-            return
-        }
-
-        if didStartAccessing { url.stopAccessingSecurityScopedResource() }
-
         isProcessingImport = true
 
         Task.detached(priority: .userInitiated) {
+            let didStartAccessing = url.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccessing {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
             do {
+                let rawData = try Data(contentsOf: url)
                 let document = try EPUBParser.parse(data: rawData)
+
                 await MainActor.run {
                     let resolvedTitle = document.title.isEmpty || document.title == "Без названия"
                         ? title
@@ -1458,7 +1464,7 @@ struct ContentView: View {
             } catch {
                 await MainActor.run {
                     isProcessingImport = false
-                    errorMessage = "Не удалось разобрать EPUB-файл. Возможно, он повреждён или использует нестандартную структуру."
+                    errorMessage = "Не удалось разобрать EPUB-файл: \(error.localizedDescription)"
                 }
             }
         }
