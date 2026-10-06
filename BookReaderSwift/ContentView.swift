@@ -142,6 +142,12 @@ struct ZipArchive {
         let dataEnd = dataStart + Int(entry.compressedSize)
 
         guard dataEnd <= data.count else { throw ZipArchiveError.invalidArchive }
+
+        let maxPlausibleSize = max(data.count * 20, 200_000_000)
+        guard Int(entry.uncompressedSize) <= maxPlausibleSize else {
+            throw ZipArchiveError.implausibleEntrySize
+        }
+
         let compressedData = data[dataStart..<dataEnd]
 
         switch entry.compressionMethod {
@@ -229,7 +235,9 @@ struct EPUBParser {
         let (manifest, spineOrder, parsedTitle) = parseOPF(data: opfData)
 
         var combinedText = ""
-        for itemID in spineOrder {
+        let maxChaptersToProcess = 2000
+        for (index, itemID) in spineOrder.enumerated() {
+            guard index < maxChaptersToProcess else { break }
             guard let href = manifest[itemID] else { continue }
             let fullPath = basePath.isEmpty ? href : "\(basePath)/\(href)"
 
@@ -238,7 +246,6 @@ struct EPUBParser {
 
             combinedText += htmlToPlainText(html) + "\n\n"
         }
-
         let trimmed = combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw EPUBParserError.invalidStructure }
 
@@ -920,6 +927,11 @@ struct ReaderView: View {
     @State private var lastScrollGeometry: ScrollGeometry?
     @State private var isHoveringTop = false
 
+    @State private var paragraphs: [String] = []
+    @State private var totalContentLength: Int = 0
+    @State private var searchMatches: [ParagraphMatch] = []
+    @State private var matchesByParagraph: [Int: [Int]] = [:]
+
     private var theme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
     }
@@ -928,34 +940,10 @@ struct ReaderView: View {
         ReadingFont(rawValue: fontRawValue) ?? .serif
     }
 
-    private var searchMatches: [Range<String.Index>] {
-        guard !searchText.isEmpty else { return [] }
-        var matches: [Range<String.Index>] = []
-        var searchStart = book.content.startIndex
-        while let range = book.content.range(
-            of: searchText,
-            options: .caseInsensitive,
-            range: searchStart..<book.content.endIndex
-        ) {
-            matches.append(range)
-            searchStart = range.upperBound
-        }
-        return matches
-    }
-
-    private var attributedContent: AttributedString {
-        var attributed = AttributedString(book.content)
-
-        guard !searchMatches.isEmpty else { return attributed }
-
-        for (index, range) in searchMatches.enumerated() {
-            guard let attrRange = Range<AttributedString.Index>(range, in: attributed) else { continue }
-            attributed[attrRange].backgroundColor = index == currentMatchIndex
-                ? Color.orange.opacity(0.6)
-                : Color.yellow.opacity(0.35)
-        }
-
-        return attributed
+    struct ParagraphMatch {
+        let paragraphIndex: Int
+        let rangeInParagraph: Range<String.Index>
+        let globalOffset: Int
     }
 
     var body: some View {
@@ -967,6 +955,20 @@ struct ReaderView: View {
             }
         }
         .preferredColorScheme(theme.colorScheme)
+        .task(id: book.persistentModelID) {
+            prepareParagraphs()
+            hasRestoredPosition = false
+            searchText = ""
+            currentMatchIndex = 0
+            searchMatches = []
+            matchesByParagraph = [:]
+            lastScrollGeometry = nil
+        }
+        .onChange(of: searchText) {
+            recomputeSearchMatches()
+            currentMatchIndex = 0
+            scrollToCurrentMatch()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
             fontSize = min(28, fontSize + 1)
         }
@@ -1018,17 +1020,19 @@ struct ReaderView: View {
                     .animation(.easeOut(duration: 0.2), value: scrollProgress)
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 28) {
+                    LazyVStack(alignment: .leading, spacing: 20) {
                         Text(book.title)
                             .font(.system(size: 26, weight: .bold, design: font.design))
                             .foregroundStyle(theme.textColor)
-                            .padding(.bottom, 4)
+                            .padding(.bottom, 8)
 
-                        Text(attributedContent)
-                            .font(.system(size: fontSize, weight: .regular, design: font.design))
-                            .lineSpacing(fontSize * 0.5)
-                            .foregroundStyle(theme.textColor.opacity(0.9))
-                            .textSelection(.enabled)
+                        ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
+                            Text(highlightedParagraph(at: index, text: paragraph))
+                                .font(.system(size: fontSize, weight: .regular, design: font.design))
+                                .lineSpacing(fontSize * 0.5)
+                                .foregroundStyle(theme.textColor.opacity(0.9))
+                                .textSelection(.enabled)
+                        }
                     }
                     .frame(maxWidth: 640, alignment: .leading)
                     .padding(.vertical, 64)
@@ -1050,10 +1054,6 @@ struct ReaderView: View {
             if !searchText.isEmpty {
                 searchResultsBar
             }
-        }
-        .onChange(of: searchText) {
-            currentMatchIndex = 0
-            scrollToCurrentMatch()
         }
     }
 
@@ -1125,6 +1125,68 @@ struct ReaderView: View {
         .background(.thinMaterial)
     }
 
+    private func prepareParagraphs() {
+        let content = book.content
+        totalContentLength = content.count
+        paragraphs = content
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func recomputeSearchMatches() {
+        guard !searchText.isEmpty else {
+            searchMatches = []
+            matchesByParagraph = [:]
+            return
+        }
+
+        var matches: [ParagraphMatch] = []
+        var byParagraph: [Int: [Int]] = [:]
+        var globalOffset = 0
+
+        for (index, paragraph) in paragraphs.enumerated() {
+            var searchStart = paragraph.startIndex
+            while let range = paragraph.range(
+                of: searchText,
+                options: .caseInsensitive,
+                range: searchStart..<paragraph.endIndex
+            ) {
+                let offsetInParagraph = paragraph.distance(from: paragraph.startIndex, to: range.lowerBound)
+                let matchIndex = matches.count
+                matches.append(
+                    ParagraphMatch(
+                        paragraphIndex: index,
+                        rangeInParagraph: range,
+                        globalOffset: globalOffset + offsetInParagraph
+                    )
+                )
+                byParagraph[index, default: []].append(matchIndex)
+                searchStart = range.upperBound
+            }
+            globalOffset += paragraph.count + 2
+        }
+
+        searchMatches = matches
+        matchesByParagraph = byParagraph
+    }
+
+    private func highlightedParagraph(at index: Int, text: String) -> AttributedString {
+        guard let matchIndices = matchesByParagraph[index], !matchIndices.isEmpty else {
+            return AttributedString(text)
+        }
+
+        var attributed = AttributedString(text)
+        for matchIndex in matchIndices {
+            let match = searchMatches[matchIndex]
+            guard let attrRange = Range<AttributedString.Index>(match.rangeInParagraph, in: attributed) else { continue }
+            attributed[attrRange].backgroundColor = matchIndex == currentMatchIndex
+                ? Color.orange.opacity(0.6)
+                : Color.yellow.opacity(0.35)
+        }
+        return attributed
+    }
+
     private func goToMatch(offset: Int) {
         guard !searchMatches.isEmpty else { return }
         let count = searchMatches.count
@@ -1133,13 +1195,12 @@ struct ReaderView: View {
     }
 
     private func scrollToCurrentMatch() {
-        guard let geometry = lastScrollGeometry, !searchMatches.isEmpty else { return }
+        guard let geometry = lastScrollGeometry, !searchMatches.isEmpty, totalContentLength > 0 else { return }
         let maxOffset = geometry.contentSize.height - geometry.containerSize.height
         guard maxOffset > 0 else { return }
 
-        let range = searchMatches[currentMatchIndex]
-        let offset = book.content.distance(from: book.content.startIndex, to: range.lowerBound)
-        let progress = Double(offset) / Double(book.content.count)
+        let match = searchMatches[currentMatchIndex]
+        let progress = Double(match.globalOffset) / Double(totalContentLength)
 
         scrollPosition.scrollTo(y: progress * maxOffset)
     }
@@ -1188,15 +1249,20 @@ struct ReaderView: View {
 
     private func addBookmark() {
         let progress = scrollProgress
-        let totalLength = book.content.count
-        let approximateIndex = Int(Double(totalLength) * progress)
-        let startIndex = book.content.index(
-            book.content.startIndex,
-            offsetBy: min(approximateIndex, max(totalLength - 1, 0))
-        )
-        let snippetText = book.content[startIndex...]
-            .prefix(80)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let approximateCharIndex = Int(Double(totalContentLength) * progress)
+
+        var cumulative = 0
+        var snippetSource = paragraphs.first ?? ""
+        for paragraph in paragraphs {
+            let paragraphLength = paragraph.count + 2
+            if cumulative + paragraphLength > approximateCharIndex {
+                snippetSource = paragraph
+                break
+            }
+            cumulative += paragraphLength
+        }
+
+        let snippetText = snippetSource.prefix(80).trimmingCharacters(in: .whitespacesAndNewlines)
 
         let bookmark = Bookmark(
             scrollOffset: progress,
