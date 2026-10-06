@@ -199,6 +199,7 @@ enum EPUBParserError: Error {
 
 struct EPUBParser {
     private static let tagRegex = try! NSRegularExpression(pattern: "<[^>]+>")
+    private static let multipleNewlinesRegex = try! NSRegularExpression(pattern: "\\n{3,}")
     
     static func parse(data: Data) throws -> EPUBDocument {
         let archive = try ZipArchive(data: data)
@@ -262,8 +263,8 @@ struct EPUBParser {
             text = text.replacingOccurrences(of: tag, with: "\n", options: .caseInsensitive)
         }
 
-        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        text = tagRegex.stringByReplacingMatches(in: text, range: fullRange, withTemplate: "")
+        let tagsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        text = tagRegex.stringByReplacingMatches(in: text, range: tagsRange, withTemplate: "")
 
         let entities: [String: String] = [
             "&amp;": "&", "&lt;": "<", "&gt;": ">",
@@ -273,9 +274,8 @@ struct EPUBParser {
             text = text.replacingOccurrences(of: entity, with: replacement)
         }
 
-        while text.contains("\n\n\n") {
-            text = text.replacingOccurrences(of: "\n\n\n", with: "\n\n")
-        }
+        let newlinesRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        text = multipleNewlinesRegex.stringByReplacingMatches(in: text, range: newlinesRange, withTemplate: "\n\n")
 
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
