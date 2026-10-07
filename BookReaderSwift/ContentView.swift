@@ -733,6 +733,51 @@ struct BookmarkRow: View {
     }
 }
 
+struct SidebarRow: View {
+    let title: String
+    let systemImage: String
+    let isSelected: Bool
+    var trailingText: String? = nil
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Label(title, systemImage: systemImage)
+                Spacer()
+                if let trailingText {
+                    Text(trailingText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary, in: Capsule())
+                }
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(
+                        isSelected
+                            ? Color.accentColor.opacity(0.18)
+                            : (isHovering ? Color.primary.opacity(0.06) : Color.clear)
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
 struct ToolbarIconButton: View {
     let systemName: String
     let action: () -> Void
@@ -884,24 +929,18 @@ struct LibraryGridView: View {
 
 struct LibrarySectionView: View {
     let count: Int
+    let isSelected: Bool
+    let onSelect: () -> Void
 
     var body: some View {
         Section("Моя коллекция") {
-            Label {
-                HStack {
-                    Text("Библиотека")
-                    Spacer()
-                    Text("\(count)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
-                }
-            } icon: {
-                Image(systemName: "books.vertical")
-            }
-            .tag("library" as String?)
+            SidebarRow(
+                title: "Библиотека",
+                systemImage: "books.vertical",
+                isSelected: isSelected,
+                trailingText: "\(count)",
+                action: onSelect
+            )
         }
     }
 }
@@ -1406,14 +1445,6 @@ struct ContentView: View {
                 columnVisibility = newValue ? .detailOnly : .automatic
             }
         }
-        .onChange(of: sidebarSelection) { _, newValue in
-            if newValue == "library", currentBook != nil {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    currentBook = nil
-                    pendingScrollTarget = nil
-                }
-            }
-        }
         .overlay {
             if isProcessingImport {
                 ZStack {
@@ -1436,9 +1467,18 @@ struct ContentView: View {
     }
     
     private var sidebarView: some View {
-        List(selection: $sidebarSelection) {
-            LibrarySectionView(count: books.count)
-            
+        List {
+            LibrarySectionView(
+                count: books.count,
+                isSelected: sidebarSelection == "library"
+            ) {
+                sidebarSelection = "library"
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    currentBook = nil
+                    pendingScrollTarget = nil
+                }
+            }
+
             BookmarksSectionView(bookmarks: bookmarks) { bookmark in
                 openBookmark(bookmark)
             } onDelete: { bookmark in
