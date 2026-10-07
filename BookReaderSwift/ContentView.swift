@@ -1476,18 +1476,24 @@ struct ContentView: View {
             let format: BookFormat = fileExtension == "md" ? .markdown : .text
             let book = Book(title: title, content: content, fileExtension: fileExtension, format: format)
             modelContext.insert(book)
+
+            try modelContext.save()
+
             currentBook = book
             errorMessage = nil
         } catch {
             errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
         }
     }
-
+    
     private func importPDF(from url: URL, title: String) {
         do {
             let data = try Data(contentsOf: url)
             let book = Book(title: title, content: "", fileExtension: "pdf", format: .pdf, pdfData: data)
             modelContext.insert(book)
+
+            try modelContext.save()
+
             currentBook = book
             errorMessage = nil
         } catch {
@@ -1523,8 +1529,15 @@ struct ContentView: View {
                         epubData: rawData
                     )
                     modelContext.insert(book)
-                    currentBook = book
-                    errorMessage = nil
+
+                    do {
+                        try modelContext.save()
+                        currentBook = book
+                        errorMessage = nil
+                    } catch {
+                        errorMessage = "Книга обработана, но не удалось сохранить её в библиотеку: \(error.localizedDescription)"
+                    }
+
                     isProcessingImport = false
                 }
             } catch {
