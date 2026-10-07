@@ -980,6 +980,11 @@ struct ReaderView: View {
             }
         }
         .preferredColorScheme(theme.colorScheme)
+        .onExitCommand {
+            if isFocusMode {
+                isFocusMode = false
+            }
+        }
         .task(id: book.persistentModelID) {
             prepareParagraphs()
             hasRestoredPosition = false
@@ -1085,16 +1090,7 @@ struct ReaderView: View {
     @ViewBuilder
     private var focusModeOverlay: some View {
         if isFocusMode {
-            Color.clear
-                .frame(height: 40)
-                .contentShape(Rectangle())
-                .onHover { hovering in
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isHoveringTop = hovering
-                    }
-                }
-
-            if isHoveringTop {
+            VStack {
                 HStack {
                     Spacer()
                     Button {
@@ -1109,11 +1105,19 @@ struct ReaderView: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .opacity(isHoveringTop ? 1.0 : 0.45)
                     .padding(.top, 12)
                     .padding(.trailing, 16)
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                Spacer()
             }
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isHoveringTop = hovering
+                }
+            }
+            .allowsHitTesting(true)
         }
     }
 
@@ -1400,6 +1404,14 @@ struct ContentView: View {
         .onChange(of: isFocusMode) { _, newValue in
             withAnimation(.easeInOut(duration: 0.25)) {
                 columnVisibility = newValue ? .detailOnly : .automatic
+            }
+        }
+        .onChange(of: sidebarSelection) { _, newValue in
+            if newValue == "library", currentBook != nil {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    currentBook = nil
+                    pendingScrollTarget = nil
+                }
             }
         }
         .overlay {
