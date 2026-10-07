@@ -650,9 +650,10 @@ struct LibraryBookCell: View {
     @State private var showingDeleteConfirmation = false
 
     private var progress: Double {
-        book.readingSession?.scrollOffset ?? 0
+        guard book.modelContext != nil else { return 0 }
+        return book.readingSession?.scrollOffset ?? 0
     }
-
+    
     var body: some View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 8) {
@@ -1251,6 +1252,8 @@ struct ReaderView: View {
     }
 
     private func saveProgress(_ progress: Double) {
+        guard book.modelContext != nil else { return }
+
         if let session = book.readingSession {
             session.scrollOffset = progress
             session.lastOpened = .now
@@ -1258,8 +1261,9 @@ struct ReaderView: View {
             book.readingSession = ReadingSession(scrollOffset: progress)
         }
     }
-
+    
     private func savePDFProgress(page: Int, pageCount: Int) {
+        guard book.modelContext != nil else { return }
         guard pageCount > 0 else { return }
         let progress = Double(page) / Double(max(pageCount - 1, 1))
 
@@ -1270,8 +1274,10 @@ struct ReaderView: View {
             book.readingSession = ReadingSession(scrollOffset: progress)
         }
     }
-
+    
     private func addBookmark() {
+        guard book.modelContext != nil else { return }
+
         let progress = scrollProgress
         let approximateCharIndex = Int(Double(totalContentLength) * progress)
 
@@ -1298,11 +1304,11 @@ struct ReaderView: View {
 }
 
 struct ContentView: View {
-
+    
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
     @Query(sort: \Bookmark.dateCreated, order: .reverse) private var bookmarks: [Bookmark]
-
+    
     @State private var isImporting = false
     @State private var currentBook: Book?
     @State private var pendingScrollTarget: Double?
@@ -1319,11 +1325,11 @@ struct ContentView: View {
     private var epubType: UTType {
         UTType(filenameExtension: "epub") ?? UTType(importedAs: "org.idpf.epub-container")
     }
-
+    
     private let gridColumns = [
         GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)
     ]
-
+    
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarView
@@ -1401,7 +1407,7 @@ struct ContentView: View {
                 ZStack {
                     Color.black.opacity(0.25)
                         .ignoresSafeArea()
-
+                    
                     VStack(spacing: 12) {
                         ProgressView()
                             .controlSize(.large)
@@ -1416,11 +1422,11 @@ struct ContentView: View {
             }
         }
     }
-
+    
     private var sidebarView: some View {
         List(selection: $sidebarSelection) {
             LibrarySectionView(count: books.count)
-
+            
             BookmarksSectionView(bookmarks: bookmarks) { bookmark in
                 openBookmark(bookmark)
             } onDelete: { bookmark in
@@ -1455,15 +1461,15 @@ struct ContentView: View {
                 Circle()
                     .fill(.tint.opacity(0.12))
                     .frame(width: 120, height: 120)
-
+                
                 Image(systemName: "book.pages")
                     .font(.system(size: 52, weight: .thin))
                     .foregroundStyle(.tint)
             }
-
+            
             Text("BookReaderSwift")
                 .font(.system(size: 32, weight: .semibold, design: .serif))
-
+            
             if let errorMessage {
                 Text(errorMessage)
                     .font(.subheadline)
@@ -1473,7 +1479,7 @@ struct ContentView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-
+            
             Button {
                 isImporting = true
             } label: {
@@ -1485,7 +1491,7 @@ struct ContentView: View {
             .padding(.top, 8)
         }
     }
-
+    
     private func importBook(from url: URL) {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
@@ -1493,10 +1499,10 @@ struct ContentView: View {
                 url.stopAccessingSecurityScopedResource()
             }
         }
-
+        
         let fileExtension = url.pathExtension.lowercased()
         let title = url.deletingPathExtension().lastPathComponent
-
+        
         switch fileExtension {
         case "pdf":
             importPDF(from: url, title: title)
@@ -1513,44 +1519,44 @@ struct ContentView: View {
             let format: BookFormat = fileExtension == "md" ? .markdown : .text
             let book = Book(title: title, content: content, fileExtension: fileExtension, format: format)
             modelContext.insert(book)
-
+            
             do {
                 try modelContext.save()
             } catch {
                 errorMessage = "Не удалось сохранить книгу: \(error.localizedDescription)"
                 return
             }
-
+            
             currentBook = book
             errorMessage = nil
         } catch {
             errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
         }
     }
-
+    
     private func importPDF(from url: URL, title: String) {
         do {
             let data = try Data(contentsOf: url)
             let book = Book(title: title, content: "", fileExtension: "pdf", format: .pdf, pdfData: data)
             modelContext.insert(book)
-
+            
             do {
                 try modelContext.save()
             } catch {
                 errorMessage = "Не удалось сохранить книгу: \(error.localizedDescription)"
                 return
             }
-
+            
             currentBook = book
             errorMessage = nil
         } catch {
             errorMessage = "Не удалось прочитать PDF-файл."
         }
     }
-
+    
     private func importEPUB(from url: URL, title: String) {
         isProcessingImport = true
-
+        
         Task.detached(priority: .userInitiated) {
             let didStartAccessing = url.startAccessingSecurityScopedResource()
             defer {
@@ -1558,16 +1564,16 @@ struct ContentView: View {
                     url.stopAccessingSecurityScopedResource()
                 }
             }
-
+            
             do {
                 let rawData = try Data(contentsOf: url)
                 let document = try EPUBParser.parse(data: rawData)
-
+                
                 await MainActor.run {
                     let resolvedTitle = document.title.isEmpty || document.title == "Без названия"
-                        ? title
-                        : document.title
-
+                    ? title
+                    : document.title
+                    
                     let book = Book(
                         title: resolvedTitle,
                         content: document.content,
@@ -1576,7 +1582,7 @@ struct ContentView: View {
                         epubData: rawData
                     )
                     modelContext.insert(book)
-
+                    
                     do {
                         try modelContext.save()
                         currentBook = book
@@ -1584,7 +1590,7 @@ struct ContentView: View {
                     } catch {
                         errorMessage = "Книга обработана, но не удалось сохранить её в библиотеку: \(error.localizedDescription)"
                     }
-
+                    
                     isProcessingImport = false
                 }
             } catch {
@@ -1612,9 +1618,13 @@ struct ContentView: View {
         if currentBook?.persistentModelID == book.persistentModelID {
             currentBook = nil
         }
-
+        
+        if let session = book.readingSession {
+            modelContext.delete(session)
+        }
+        
         modelContext.delete(book)
-
+        
         do {
             try modelContext.save()
         } catch {
