@@ -644,8 +644,10 @@ struct NSRectCorner: OptionSet {
 struct LibraryBookCell: View {
     let book: Book
     let onOpen: () -> Void
+    let onDelete: () -> Void
 
     @State private var isHovering = false
+    @State private var showingDeleteConfirmation = false
 
     private var progress: Double {
         book.readingSession?.scrollOffset ?? 0
@@ -673,6 +675,25 @@ struct LibraryBookCell: View {
             withAnimation(.easeOut(duration: 0.15)) {
                 isHovering = hovering
             }
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                showingDeleteConfirmation = true
+            } label: {
+                Label("Удалить книгу", systemImage: "trash")
+            }
+        }
+        .confirmationDialog(
+            "Удалить «\(book.title)»?",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Удалить", role: .destructive) {
+                onDelete()
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Книга и весь прогресс чтения будут удалены без возможности восстановления.")
         }
     }
 }
@@ -837,6 +858,7 @@ struct EmptyLibraryView: View {
 struct LibraryGridView: View {
     let books: [Book]
     let onSelect: (Book) -> Void
+    let onDelete: (Book) -> Void
 
     private let columns = [
         GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)
@@ -848,6 +870,8 @@ struct LibraryGridView: View {
                 ForEach(books) { book in
                     LibraryBookCell(book: book) {
                         onSelect(book)
+                    } onDelete: {
+                        onDelete(book)
                     }
                 }
             }
@@ -1418,6 +1442,8 @@ struct ContentView: View {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         currentBook = book
                     }
+                } onDelete: { book in
+                    deleteBook(book)
                 }
             }
         }
@@ -1580,6 +1606,20 @@ struct ContentView: View {
     
     private func deleteBookmark(_ bookmark: Bookmark) {
         modelContext.delete(bookmark)
+    }
+    
+    private func deleteBook(_ book: Book) {
+        if currentBook?.persistentModelID == book.persistentModelID {
+            currentBook = nil
+        }
+
+        modelContext.delete(book)
+
+        do {
+            try modelContext.save()
+        } catch {
+            errorMessage = "Не удалось удалить книгу: \(error.localizedDescription)"
+        }
     }
 }
 
