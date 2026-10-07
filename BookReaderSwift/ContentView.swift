@@ -1356,6 +1356,17 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
             isImporting = true
         }
+        .alert(
+            "Ошибка",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("Ок") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
         .onChange(of: isFocusMode) { _, newValue in
             withAnimation(.easeInOut(duration: 0.25)) {
                 columnVisibility = newValue ? .detailOnly : .automatic
@@ -1477,7 +1488,12 @@ struct ContentView: View {
             let book = Book(title: title, content: content, fileExtension: fileExtension, format: format)
             modelContext.insert(book)
 
-            try modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                errorMessage = "Не удалось сохранить книгу: \(error.localizedDescription)"
+                return
+            }
 
             currentBook = book
             errorMessage = nil
@@ -1485,14 +1501,19 @@ struct ContentView: View {
             errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
         }
     }
-    
+
     private func importPDF(from url: URL, title: String) {
         do {
             let data = try Data(contentsOf: url)
             let book = Book(title: title, content: "", fileExtension: "pdf", format: .pdf, pdfData: data)
             modelContext.insert(book)
 
-            try modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                errorMessage = "Не удалось сохранить книгу: \(error.localizedDescription)"
+                return
+            }
 
             currentBook = book
             errorMessage = nil
@@ -1500,7 +1521,7 @@ struct ContentView: View {
             errorMessage = "Не удалось прочитать PDF-файл."
         }
     }
-    
+
     private func importEPUB(from url: URL, title: String) {
         isProcessingImport = true
 

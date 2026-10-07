@@ -7,6 +7,33 @@ struct BookReaderSwiftApp: App {
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
     @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
 
+    private let container: ModelContainer = {
+        let schema = Schema([Book.self, ReadingSession.self, Bookmark.self])
+        let configuration = ModelConfiguration(schema: schema)
+
+        do {
+            return try ModelContainer(for: schema, configurations: [configuration])
+        } catch {
+            if let storeURL = configuration.url as URL?,
+               FileManager.default.fileExists(atPath: storeURL.path) {
+                let shmURL = storeURL.deletingLastPathComponent()
+                    .appendingPathComponent(storeURL.lastPathComponent + "-shm")
+                let walURL = storeURL.deletingLastPathComponent()
+                    .appendingPathComponent(storeURL.lastPathComponent + "-wal")
+
+                try? FileManager.default.removeItem(at: storeURL)
+                try? FileManager.default.removeItem(at: shmURL)
+                try? FileManager.default.removeItem(at: walURL)
+            }
+
+            do {
+                return try ModelContainer(for: schema, configurations: [configuration])
+            } catch {
+                fatalError("Не удалось создать хранилище данных даже после сброса: \(error)")
+            }
+        }
+    }()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -57,6 +84,6 @@ struct BookReaderSwiftApp: App {
                 .keyboardShortcut("-", modifiers: .command)
             }
         }
-        .modelContainer(for: [Book.self, ReadingSession.self, Bookmark.self])
+        .modelContainer(container)
     }
 }
