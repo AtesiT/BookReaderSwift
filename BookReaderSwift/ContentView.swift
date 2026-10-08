@@ -645,15 +645,18 @@ struct LibraryBookCell: View {
     let book: Book
     let onOpen: () -> Void
     let onDelete: () -> Void
+    let onRename: (String) -> Void
 
     @State private var isHovering = false
     @State private var showingDeleteConfirmation = false
+    @State private var showingRenameAlert = false
+    @State private var renameText = ""
 
     private var progress: Double {
         guard book.modelContext != nil else { return 0 }
         return book.readingSession?.scrollOffset ?? 0
     }
-    
+
     var body: some View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 8) {
@@ -678,6 +681,15 @@ struct LibraryBookCell: View {
             }
         }
         .contextMenu {
+            Button {
+                renameText = book.title
+                showingRenameAlert = true
+            } label: {
+                Label("Переименовать", systemImage: "pencil")
+            }
+
+            Divider()
+
             Button(role: .destructive) {
                 showingDeleteConfirmation = true
             } label: {
@@ -695,6 +707,18 @@ struct LibraryBookCell: View {
             Button("Отмена", role: .cancel) {}
         } message: {
             Text("Книга и весь прогресс чтения будут удалены без возможности восстановления.")
+        }
+        .alert("Переименовать книгу", isPresented: $showingRenameAlert) {
+            TextField("Название книги", text: $renameText)
+
+            Button("Сохранить") {
+                let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    onRename(trimmed)
+                }
+            }
+
+            Button("Отмена", role: .cancel) {}
         }
     }
 }
@@ -905,6 +929,7 @@ struct LibraryGridView: View {
     let books: [Book]
     let onSelect: (Book) -> Void
     let onDelete: (Book) -> Void
+    let onRename: (Book, String) -> Void
 
     private let columns = [
         GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)
@@ -918,6 +943,8 @@ struct LibraryGridView: View {
                         onSelect(book)
                     } onDelete: {
                         onDelete(book)
+                    } onRename: { newTitle in
+                        onRename(book, newTitle)
                     }
                 }
             }
@@ -1502,6 +1529,8 @@ struct ContentView: View {
                     }
                 } onDelete: { book in
                     deleteBook(book)
+                } onRename: { book, newTitle in
+                    renameBook(book, to: newTitle)
                 }
             }
         }
@@ -1681,6 +1710,16 @@ struct ContentView: View {
             try modelContext.save()
         } catch {
             errorMessage = "Не удалось удалить книгу: \(error.localizedDescription)"
+        }
+    }
+    
+    private func renameBook(_ book: Book, to newTitle: String) {
+        book.title = newTitle
+
+        do {
+            try modelContext.save()
+        } catch {
+            errorMessage = "Не удалось переименовать книгу: \(error.localizedDescription)"
         }
     }
 }
