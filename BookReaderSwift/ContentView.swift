@@ -217,6 +217,11 @@ struct EPUBParser {
     private static let tagRegex = try! NSRegularExpression(pattern: "<[^>]+>")
     private static let multipleNewlinesRegex = try! NSRegularExpression(pattern: "\\n{3,}")
     
+    private static let scriptStyleRegex = try! NSRegularExpression(
+        pattern: "<(script|style)[^>]*>[\\s\\S]*?</\\1>",
+        options: .caseInsensitive
+    )
+    
     static func parse(data: Data) throws -> EPUBDocument {
         let archive = try ZipArchive(data: data)
 
@@ -271,17 +276,8 @@ struct EPUBParser {
     private static func htmlToPlainText(_ html: String) -> String {
         var text = html
 
-        let blockTags = [
-            "</p>", "<br>", "<br/>", "<br />",
-            "</div>", "</li>",
-            "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>"
-        ]
-        for tag in blockTags {
-            text = text.replacingOccurrences(of: tag, with: "\n", options: .caseInsensitive)
-        }
-
-        let tagsRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        text = tagRegex.stringByReplacingMatches(in: text, range: tagsRange, withTemplate: "")
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        text = scriptStyleRegex.stringByReplacingMatches(in: text, range: fullRange, withTemplate: "")
 
         let entities: [String: String] = [
             "&amp;": "&", "&lt;": "<", "&gt;": ">",
