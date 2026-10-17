@@ -1030,6 +1030,11 @@ struct ReaderView: View {
     private var font: ReadingFont {
         ReadingFont(rawValue: fontRawValue) ?? .serif
     }
+    
+    private struct ReaderTaskID: Equatable {
+        let bookID: PersistentIdentifier
+        let override: Double?
+    }
 
     struct ParagraphMatch {
         let paragraphIndex: Int
@@ -1051,7 +1056,7 @@ struct ReaderView: View {
                 isFocusMode = false
             }
         }
-        .task(id: book.persistentModelID) {
+        .task(id: ReaderTaskID(bookID: book.persistentModelID, override: initialScrollOverride)) {
             prepareParagraphs()
             hasRestoredPosition = false
             searchText = ""
