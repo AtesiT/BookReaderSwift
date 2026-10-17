@@ -1575,21 +1575,24 @@ struct ContentView: View {
     }
     
     private func importBook(from url: URL) {
+        let fileExtension = url.pathExtension.lowercased()
+        let title = url.deletingPathExtension().lastPathComponent
+
+        if fileExtension == "epub" {
+            importEPUB(from: url, title: title)
+            return
+        }
+
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {
                 url.stopAccessingSecurityScopedResource()
             }
         }
-        
-        let fileExtension = url.pathExtension.lowercased()
-        let title = url.deletingPathExtension().lastPathComponent
-        
+
         switch fileExtension {
         case "pdf":
             importPDF(from: url, title: title)
-        case "epub":
-            importEPUB(from: url, title: title)
         default:
             importPlainText(from: url, title: title, fileExtension: fileExtension)
         }
