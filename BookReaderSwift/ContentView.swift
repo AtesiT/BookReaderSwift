@@ -216,11 +216,15 @@ enum EPUBParserError: Error {
 struct EPUBParser {
     private static let tagRegex = try! NSRegularExpression(pattern: "<[^>]+>")
     private static let multipleNewlinesRegex = try! NSRegularExpression(pattern: "\\n{3,}")
-    
     private static let scriptStyleRegex = try! NSRegularExpression(
         pattern: "<(script|style)[^>]*>[\\s\\S]*?</\\1>",
         options: .caseInsensitive
     )
+    private static let blockTags = [
+        "</p>", "<br>", "<br/>", "<br />",
+        "</div>", "</li>",
+        "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>"
+    ]
     
     static func parse(data: Data) throws -> EPUBDocument {
         let archive = try ZipArchive(data: data)
@@ -275,25 +279,33 @@ struct EPUBParser {
     }
 
     private static func htmlToPlainText(_ html: String) -> String {
-        var text = html
+            var text = html
 
-        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        text = scriptStyleRegex.stringByReplacingMatches(in: text, range: fullRange, withTemplate: "")
+            let scriptRange = NSRange(text.startIndex..<text.endIndex, in: text)
+            text = scriptStyleRegex.stringByReplacingMatches(in: text, range: scriptRange, withTemplate: "")
 
-        let entities: [String: String] = [
-            "&amp;": "&", "&lt;": "<", "&gt;": ">",
-            "&quot;": "\"", "&#39;": "'", "&nbsp;": " "
-        ]
-        for (entity, replacement) in entities {
-            text = text.replacingOccurrences(of: entity, with: replacement)
+            for tag in blockTags {
+                text = text.replacingOccurrences(of: tag, with: "\n", options: .caseInsensitive)
+            }
+
+            let tagsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+            text = tagRegex.stringByReplacingMatches(in: text, range: tagsRange, withTemplate: "")
+
+            let entities: [String: String] = [
+                "&amp;": "&", "&lt;": "<", "&gt;": ">",
+                "&quot;": "\"", "&#39;": "'", "&nbsp;": " "
+            ]
+            for (entity, replacement) in entities {
+                text = text.replacingOccurrences(of: entity, with: replacement)
+            }
+
+            let newlinesRange = NSRange(text.startIndex..<text.endIndex, in: text)
+            text = multipleNewlinesRegex.stringByReplacingMatches(in: text, range: newlinesRange, withTemplate: "\n\n")
+
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-
-        let newlinesRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        text = multipleNewlinesRegex.stringByReplacingMatches(in: text, range: newlinesRange, withTemplate: "\n\n")
-
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-}
+
 
 private final class ContainerXMLDelegate: NSObject, XMLParserDelegate {
     var opfPath: String?
