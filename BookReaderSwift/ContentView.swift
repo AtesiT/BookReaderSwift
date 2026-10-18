@@ -562,10 +562,11 @@ struct PDFKitView: NSViewRepresentable {
 }
 
 private func generatedColor(from string: String) -> Color {
-    var hasher = Hasher()
-    hasher.combine(string)
-    let hash = abs(hasher.finalize())
-
+    var hash: UInt64 = 1469598103934665603
+    for byte in string.utf8 {
+        hash ^= UInt64(byte)
+        hash = hash &* 1099511628211
+    }
     let hue = Double(hash % 360) / 360.0
     return Color(hue: hue, saturation: 0.55, brightness: 0.85)
 }
