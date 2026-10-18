@@ -245,10 +245,11 @@ struct EPUBParser {
             guard index < maxChaptersToProcess else { break }
             guard let href = manifest[itemID] else { continue }
             let fullPath = basePath.isEmpty ? href : "\(basePath)/\(href)"
+            let resolvedPath = fullPath.removingPercentEncoding ?? fullPath
 
-            guard let chapterData = try? archive.data(for: fullPath),
+            guard let chapterData = try? archive.data(for: resolvedPath),
                   let html = String(data: chapterData, encoding: .utf8) else { continue }
-
+            
             combinedText += htmlToPlainText(html) + "\n\n"
         }
         let trimmed = combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
