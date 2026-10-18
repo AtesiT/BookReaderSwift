@@ -1398,10 +1398,6 @@ struct ContentView: View {
         UTType(filenameExtension: "epub") ?? UTType(importedAs: "org.idpf.epub-container")
     }
     
-    private let gridColumns = [
-        GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)
-    ]
-    
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarView
@@ -1535,43 +1531,6 @@ struct ContentView: View {
                     renameBook(book, to: newTitle)
                 }
             }
-        }
-    }
-    
-    private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            ZStack {
-                Circle()
-                    .fill(.tint.opacity(0.12))
-                    .frame(width: 120, height: 120)
-                
-                Image(systemName: "book.pages")
-                    .font(.system(size: 52, weight: .thin))
-                    .foregroundStyle(.tint)
-            }
-            
-            Text("BookReaderSwift")
-                .font(.system(size: 32, weight: .semibold, design: .serif))
-            
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.subheadline)
-                    .foregroundStyle(.red)
-            } else {
-                Text("Открой файл .txt или .md, чтобы начать чтение")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            
-            Button {
-                isImporting = true
-            } label: {
-                Label("Открыть книгу", systemImage: "folder")
-                    .padding(.horizontal, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.top, 8)
         }
     }
     
