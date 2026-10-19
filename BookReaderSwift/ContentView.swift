@@ -620,7 +620,7 @@ struct BookCoverView: View {
 
 struct RoundedCorner: Shape {
     var radius: CGFloat
-    var corners: NSRectCorner
+    var corners: RectCorner
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
@@ -643,12 +643,12 @@ struct RoundedCorner: Shape {
     }
 }
 
-struct NSRectCorner: OptionSet {
+struct RectCorner: OptionSet {
     let rawValue: Int
-    static let topLeft = NSRectCorner(rawValue: 1 << 0)
-    static let topRight = NSRectCorner(rawValue: 1 << 1)
-    static let bottomLeft = NSRectCorner(rawValue: 1 << 2)
-    static let bottomRight = NSRectCorner(rawValue: 1 << 3)
+    static let topLeft = RectCorner(rawValue: 1 << 0)
+    static let topRight = RectCorner(rawValue: 1 << 1)
+    static let bottomLeft = RectCorner(rawValue: 1 << 2)
+    static let bottomRight = RectCorner(rawValue: 1 << 3)
 }
 
 struct LibraryBookCell: View {
@@ -1032,6 +1032,7 @@ struct ReaderView: View {
     @State private var totalContentLength: Int = 0
     @State private var searchMatches: [ParagraphMatch] = []
     @State private var matchesByParagraph: [Int: [Int]] = [:]
+    @State private var searchTask: Task<Void, Never>?
 
     private var theme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
@@ -1084,10 +1085,15 @@ struct ReaderView: View {
             matchesByParagraph = [:]
             lastScrollGeometry = nil
         }
-        .onChange(of: searchText) {
-            recomputeSearchMatches()
-            currentMatchIndex = 0
-            scrollToCurrentMatch()
+        .onChange(of: searchText) { _, newValue in
+            searchTask?.cancel()
+            searchTask = Task {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled else { return }
+                recomputeSearchMatches()
+                currentMatchIndex = 0
+                scrollToCurrentMatch()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
             fontSize = min(28, fontSize + 1)
