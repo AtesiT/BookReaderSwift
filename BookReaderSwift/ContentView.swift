@@ -1067,7 +1067,16 @@ struct ReaderView: View {
             }
         }
         .task(id: ReaderTaskID(bookID: book.persistentModelID, override: initialScrollOverride)) {
-            prepareParagraphs()
+            let content = book.content
+            let computed = await Task.detached(priority: .userInitiated) {
+                content
+                    .components(separatedBy: "\n\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            }.value
+
+            paragraphs = computed
+            totalContentLength = content.count
             hasRestoredPosition = false
             searchText = ""
             currentMatchIndex = 0
