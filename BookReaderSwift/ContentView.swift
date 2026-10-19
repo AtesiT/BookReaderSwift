@@ -1682,21 +1682,10 @@ struct ContentView: View {
     }
     
     private func deleteBook(_ book: Book) {
-        if currentBook?.persistentModelID == book.persistentModelID {
-            currentBook = nil
-        }
-        
         if let session = book.readingSession {
             modelContext.delete(session)
         }
-        
         modelContext.delete(book)
-        
-        do {
-            try modelContext.save()
-        } catch {
-            errorMessage = "Не удалось удалить книгу: \(error.localizedDescription)"
-        }
     }
     
     private func renameBook(_ book: Book, to newTitle: String) {
