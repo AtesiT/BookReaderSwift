@@ -1,5 +1,12 @@
 import SwiftUI
 import SwiftData
+import os
+
+private let appLogger = Logger(subsystem: "com.bookreaderswift.app", category: "Storage")
+
+extension Notification.Name {
+    static let dataStoreResetOccurred = Notification.Name("dataStoreResetOccurred")
+}
 
 @main
 struct BookReaderSwiftApp: App {
@@ -7,37 +14,75 @@ struct BookReaderSwiftApp: App {
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
     @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
 
+    private static var recoveryMessage: String?
+
     private let container: ModelContainer = {
         let schema = Schema([Book.self, ReadingSession.self, Bookmark.self])
         let configuration = ModelConfiguration(schema: schema)
 
         do {
-            return try ModelContainer(for: schema, configurations: [configuration])
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            appLogger.info("Хранилище данных успешно загружено.")
+            return container
         } catch {
+            appLogger.error("Не удалось создать ModelContainer: \(error.localizedDescription, privacy: .public)")
+
             if let storeURL = configuration.url as URL?,
                FileManager.default.fileExists(atPath: storeURL.path) {
-                let shmURL = storeURL.deletingLastPathComponent()
-                    .appendingPathComponent(storeURL.lastPathComponent + "-shm")
-                let walURL = storeURL.deletingLastPathComponent()
-                    .appendingPathComponent(storeURL.lastPathComponent + "-wal")
-
-                try? FileManager.default.removeItem(at: storeURL)
-                try? FileManager.default.removeItem(at: shmURL)
-                try? FileManager.default.removeItem(at: walURL)
+                backupCorruptedStore(at: storeURL)
             }
 
             do {
-                return try ModelContainer(for: schema, configurations: [configuration])
+                let container = try ModelContainer(for: schema, configurations: [configuration])
+                recoveryMessage = "Не удалось загрузить предыдущую библиотеку из-за повреждения или несовместимости данных. Была создана новая пустая библиотека. Копия старых данных сохранена на диске."
+                appLogger.warning("Хранилище пересоздано после сброса повреждённого стора.")
+                return container
             } catch {
+                appLogger.fault("Не удалось создать хранилище данных даже после сброса: \(error.localizedDescription, privacy: .public)")
                 fatalError("Не удалось создать хранилище данных даже после сброса: \(error)")
             }
         }
     }()
 
+    private static func backupCorruptedStore(at storeURL: URL) {
+        let fileManager = FileManager.default
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let directory = storeURL.deletingLastPathComponent()
+        let baseName = storeURL.lastPathComponent
+
+        let suffixes = ["", "-shm", "-wal"]
+
+        for suffix in suffixes {
+            let originalName = baseName + suffix
+            let originalURL = directory.appendingPathComponent(originalName)
+            guard fileManager.fileExists(atPath: originalURL.path) else { continue }
+
+            let backupURL = directory.appendingPathComponent("\(originalName).corrupted.\(timestamp)")
+
+            do {
+                try fileManager.moveItem(at: originalURL, to: backupURL)
+                appLogger.info("Файл \(originalName, privacy: .public) перемещён в резервную копию \(backupURL.lastPathComponent, privacy: .public)")
+            } catch {
+                appLogger.error("Не удалось переместить \(originalName, privacy: .public) в резервную копию: \(error.localizedDescription, privacy: .public). Будет выполнено удаление.")
+                try? fileManager.removeItem(at: originalURL)
+            }
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .frame(minWidth: 900, minHeight: 600)
+                .onAppear {
+                    if let message = BookReaderSwiftApp.recoveryMessage {
+                        NotificationCenter.default.post(
+                            name: .dataStoreResetOccurred,
+                            object: nil,
+                            userInfo: ["message": message]
+                        )
+                        BookReaderSwiftApp.recoveryMessage = nil
+                    }
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)

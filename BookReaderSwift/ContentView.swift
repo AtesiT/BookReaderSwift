@@ -1417,6 +1417,7 @@ struct ContentView: View {
     @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
     @Query(sort: \Bookmark.dateCreated, order: .reverse) private var bookmarks: [Bookmark]
     
+    @State private var dataStoreWarningMessage: String?
     @State private var isImporting = false
     @State private var currentBook: Book?
     @State private var pendingScrollTarget: Double?
@@ -1490,16 +1491,19 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
             isImporting = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .dataStoreResetOccurred)) { notification in
+            dataStoreWarningMessage = notification.userInfo?["message"] as? String
+        }
         .alert(
-            "Ошибка",
+            "Внимание",
             isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
+                get: { dataStoreWarningMessage != nil },
+                set: { if !$0 { dataStoreWarningMessage = nil } }
             )
         ) {
-            Button("Ок") { errorMessage = nil }
+            Button("Понятно") { dataStoreWarningMessage = nil }
         } message: {
-            Text(errorMessage ?? "")
+            Text(dataStoreWarningMessage ?? "")
         }
         .onChange(of: isFocusMode) { _, newValue in
             withAnimation(.easeInOut(duration: 0.25)) {
