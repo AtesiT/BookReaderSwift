@@ -545,6 +545,10 @@ struct PDFKitView: NSViewRepresentable {
 
     func updateNSView(_ nsView: PDFView, context: Context) {}
 
+    static func dismantleNSView(_ nsView: PDFView, coordinator: Coordinator) {
+        NotificationCenter.default.removeObserver(coordinator, name: .PDFViewPageChanged, object: nsView)
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(onPageChanged: onPageChanged)
     }
