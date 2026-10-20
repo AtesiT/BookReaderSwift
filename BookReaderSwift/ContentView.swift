@@ -390,6 +390,9 @@ final class Book {
     @Relationship(deleteRule: .cascade)
     var readingSession: ReadingSession?
 
+    @Relationship(deleteRule: .cascade, inverse: \Bookmark.book)
+    var bookmarks: [Bookmark] = []
+
     var format: BookFormat {
         get { BookFormat(rawValue: formatRawValue) ?? .text }
         set { formatRawValue = newValue.rawValue }
@@ -412,6 +415,7 @@ final class Book {
         self.epubData = epubData
     }
 }
+
 @Model
 final class ReadingSession {
     var scrollOffset: Double
@@ -1688,9 +1692,6 @@ struct ContentView: View {
     }
     
     private func deleteBook(_ book: Book) {
-        if let session = book.readingSession {
-            modelContext.delete(session)
-        }
         modelContext.delete(book)
     }
     
