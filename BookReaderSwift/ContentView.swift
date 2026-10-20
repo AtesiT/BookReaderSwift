@@ -1595,24 +1595,51 @@ struct ContentView: View {
     }
     
     private func importPlainText(from url: URL, title: String, fileExtension: String) {
-        do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            let format: BookFormat = fileExtension == "md" ? .markdown : .text
-            let book = Book(title: title, content: content, fileExtension: fileExtension, format: format)
-            modelContext.insert(book)
-            
-            do {
-                try modelContext.save()
-            } catch {
-                errorMessage = "Не удалось сохранить книгу: \(error.localizedDescription)"
-                return
-            }
-            
-            currentBook = book
-            errorMessage = nil
-        } catch {
+        guard let content = decodeTextFile(at: url) else {
             errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
+            return
         }
+
+        let format: BookFormat = fileExtension == "md" ? .markdown : .text
+        let book = Book(title: title, content: content, fileExtension: fileExtension, format: format)
+        modelContext.insert(book)
+
+        do {
+            try modelContext.save()
+        } catch {
+            errorMessage = "Не удалось сохранить книгу: \(error.localizedDescription)"
+            return
+        }
+
+        currentBook = book
+        errorMessage = nil
+    }
+
+    private func decodeTextFile(at url: URL) -> String? {
+        var usedEncoding: String.Encoding = .utf8
+        if let content = try? String(contentsOf: url, usedEncoding: &usedEncoding) {
+            return content
+        }
+
+        guard let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+
+        let fallbackEncodings: [String.Encoding] = [
+            .utf8,
+            .utf16,
+            .windowsCP1251,
+            .isoLatin1,
+            .macOSRoman
+        ]
+
+        for encoding in fallbackEncodings {
+            if let content = String(data: data, encoding: encoding) {
+                return content
+            }
+        }
+
+        return nil
     }
     
     private func importPDF(from url: URL, title: String) {
