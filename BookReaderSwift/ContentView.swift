@@ -1307,18 +1307,10 @@ struct PDFKitView: NSViewRepresentable {
         pdfView.displayDirection = .vertical
         pdfView.document = document
 
-        NotificationCenter.default.addObserver(
-            context.coordinator,
-            selector: #selector(Coordinator.pageChanged),
-            name: Notification.Name.PDFViewPageChanged,
-            object: pdfView
-        )
+        context.coordinator.attachObservers(to: pdfView)
 
-        if progress > 0, document.pageCount > 0 {
-            let pageIndex = min(Int(progress * Double(document.pageCount)), document.pageCount - 1)
-            if let page = document.page(at: pageIndex) {
-                pdfView.go(to: page)
-            }
+        if progress > 0 {
+            context.coordinator.restoreProgress(progress, in: pdfView, document: document)
         }
 
         return pdfView
@@ -1327,6 +1319,13 @@ struct PDFKitView: NSViewRepresentable {
     func updateNSView(_ pdfView: PDFView, context: Context) {
         if pdfView.document !== document {
             pdfView.document = document
+            context.coordinator.lastReportedProgress = -1
+            context.coordinator.attachObservers(to: pdfView)
+            if progress > 0 {
+                DispatchQueue.main.async {
+                    context.coordinator.restoreProgress(progress, in: pdfView, document: document)
+                }
+            }
         }
     }
 
@@ -1336,20 +1335,96 @@ struct PDFKitView: NSViewRepresentable {
 
     final class Coordinator: NSObject {
         var parent: PDFKitView
+        weak var pdfView: PDFView?
+        var lastReportedProgress: Double = -1
+        private var isRestoring = false
 
         init(_ parent: PDFKitView) {
             self.parent = parent
         }
 
-        @objc func pageChanged(_ notification: Notification) {
-            guard let pdfView = notification.object as? PDFView,
+        func attachObservers(to pdfView: PDFView) {
+            self.pdfView = pdfView
+            NotificationCenter.default.removeObserver(self)
+
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(pageChanged),
+                name: Notification.Name.PDFViewPageChanged,
+                object: pdfView
+            )
+
+            if let scrollView = pdfView.documentView?.enclosingScrollView {
+                scrollView.contentView.postsBoundsChangedNotifications = true
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(scrollChanged),
+                    name: NSView.boundsDidChangeNotification,
+                    object: scrollView.contentView
+                )
+            }
+        }
+
+        @objc func pageChanged() {
+            updateProgress()
+        }
+
+        @objc func scrollChanged() {
+            updateProgress()
+        }
+
+        private func updateProgress() {
+            guard !isRestoring,
+                  let pdfView = pdfView,
                   let document = pdfView.document,
                   document.pageCount > 0,
                   let currentPage = pdfView.currentPage else { return }
 
             let pageIndex = document.index(for: currentPage)
-            parent.currentPageIndex = pageIndex
-            parent.progress = Double(pageIndex) / Double(document.pageCount)
+
+            let visibleRect = pdfView.convert(pdfView.bounds, to: currentPage)
+            let pageBounds = currentPage.bounds(for: pdfView.displayBox)
+            let pageHeight = pageBounds.height
+
+            var fractionWithinPage: Double = 0
+            if pageHeight > 0 {
+                let distanceFromTop = pageBounds.maxY - visibleRect.maxY
+                fractionWithinPage = min(max(Double(distanceFromTop / pageHeight), 0), 1)
+            }
+
+            let newProgress = min(max((Double(pageIndex) + fractionWithinPage) / Double(document.pageCount), 0), 1)
+
+            if abs(newProgress - lastReportedProgress) > 0.001 {
+                lastReportedProgress = newProgress
+                let parent = self.parent
+                DispatchQueue.main.async {
+                    parent.currentPageIndex = pageIndex
+                    parent.progress = newProgress
+                }
+            }
+        }
+
+        func restoreProgress(_ progress: Double, in pdfView: PDFView, document: PDFDocument) {
+            isRestoring = true
+            defer { isRestoring = false }
+
+            let pageCount = document.pageCount
+            guard pageCount > 0 else { return }
+
+            let rawPage = progress * Double(pageCount)
+            let pageIndex = min(max(Int(rawPage), 0), pageCount - 1)
+            let fractionWithinPage = rawPage - Double(pageIndex)
+
+            guard let page = document.page(at: pageIndex) else { return }
+
+            let pageBounds = page.bounds(for: pdfView.displayBox)
+            let y = pageBounds.maxY - CGFloat(fractionWithinPage) * pageBounds.height
+            let point = CGPoint(x: pageBounds.minX, y: y)
+
+            let destination = PDFDestination(page: page, at: point)
+            pdfView.go(to: destination)
+
+            lastReportedProgress = progress
         }
 
         deinit {
