@@ -1,124 +1,261 @@
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
 import PDFKit
+import UniformTypeIdentifiers
 import Compression
+import AppKit
 
 extension Notification.Name {
     static let openBookRequested = Notification.Name("openBookRequested")
+    static let focusSearchRequested = Notification.Name("focusSearchRequested")
+    static let closeBookRequested = Notification.Name("closeBookRequested")
+    static let addBookmarkRequested = Notification.Name("addBookmarkRequested")
+    static let nextMatchRequested = Notification.Name("nextMatchRequested")
+    static let previousMatchRequested = Notification.Name("previousMatchRequested")
     static let increaseFontSizeRequested = Notification.Name("increaseFontSizeRequested")
     static let decreaseFontSizeRequested = Notification.Name("decreaseFontSizeRequested")
-    static let focusSearchRequested = Notification.Name("focusSearchRequested")
 }
 
-enum BookFormat: String, Codable {
-    case text
-    case markdown
+enum BookFormat: String, Codable, CaseIterable {
+    case txt
+    case md
     case pdf
     case epub
-}
 
-struct ZipEntry {
-    let name: String
-    let compressionMethod: UInt16
-    let compressedSize: UInt32
-    let uncompressedSize: UInt32
-    let localHeaderOffset: UInt32
-}
-
-enum ZipArchiveError: Error, LocalizedError {
-    case invalidArchive
-    case entryNotFound
-    case decompressionFailed
-    case implausibleEntrySize
-
-    var errorDescription: String? {
+    var displayName: String {
         switch self {
-        case .invalidArchive: "Архив повреждён или имеет неподдерживаемую структуру"
-        case .entryNotFound: "Файл внутри архива не найден"
-        case .decompressionFailed: "Не удалось распаковать содержимое"
-        case .implausibleEntrySize: "Обнаружен файл подозрительно большого размера внутри архива"
+        case .txt: return "TXT"
+        case .md: return "Markdown"
+        case .pdf: return "PDF"
+        case .epub: return "EPUB"
         }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .txt: return "doc.text"
+        case .md: return "doc.richtext"
+        case .pdf: return "doc.fill"
+        case .epub: return "books.vertical"
+        }
+    }
+}
+
+enum ReadingTheme: String, Codable, CaseIterable, Identifiable {
+    case light
+    case sepia
+    case dark
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .light: return "Светлая"
+        case .sepia: return "Сепия"
+        case .dark: return "Тёмная"
+        }
+    }
+
+    var backgroundColor: Color {
+        switch self {
+        case .light: return Color.white
+        case .sepia: return Color(red: 0.96, green: 0.92, blue: 0.82)
+        case .dark: return Color(red: 0.11, green: 0.11, blue: 0.12)
+        }
+    }
+
+    var textColor: Color {
+        switch self {
+        case .light: return Color.black
+        case .sepia: return Color(red: 0.25, green: 0.18, blue: 0.1)
+        case .dark: return Color(white: 0.92)
+        }
+    }
+}
+
+enum ReadingFont: String, Codable, CaseIterable, Identifiable {
+    case system
+    case serif
+    case monospaced
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .system: return "Системный"
+        case .serif: return "С засечками"
+        case .monospaced: return "Моноширинный"
+        }
+    }
+
+    func font(size: CGFloat) -> Font {
+        switch self {
+        case .system: return .system(size: size)
+        case .serif: return .system(size: size, design: .serif)
+        case .monospaced: return .system(size: size, design: .monospaced)
+        }
+    }
+}
+
+enum LibrarySortOrder: String, CaseIterable, Identifiable {
+    case title
+    case author
+    case recentlyAdded
+    case recentlyOpened
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .title: return "По названию"
+        case .author: return "По автору"
+        case .recentlyAdded: return "По дате добавления"
+        case .recentlyOpened: return "По последнему чтению"
+        }
+    }
+}
+
+@Model
+final class Book {
+    var title: String
+    var author: String?
+    var formatRaw: String
+    var content: String
+    var pdfData: Data?
+    var epubData: Data?
+    var importedAt: Date
+    var lastProgress: Double
+    var lastPageIndex: Int
+    var coverSeed: String
+
+    @Relationship(deleteRule: .cascade, inverse: \Bookmark.book)
+    var bookmarks: [Bookmark] = []
+
+    @Relationship(deleteRule: .cascade, inverse: \ReadingSession.book)
+    var readingSession: ReadingSession?
+
+    var format: BookFormat {
+        get { BookFormat(rawValue: formatRaw) ?? .txt }
+        set { formatRaw = newValue.rawValue }
+    }
+
+    var lastOpenedDate: Date? {
+        readingSession?.lastOpened
+    }
+
+    init(title: String, author: String? = nil, format: BookFormat, content: String = "", pdfData: Data? = nil, epubData: Data? = nil) {
+        self.title = title
+        self.author = author
+        self.formatRaw = format.rawValue
+        self.content = content
+        self.pdfData = pdfData
+        self.epubData = epubData
+        self.importedAt = .now
+        self.lastProgress = 0
+        self.lastPageIndex = 0
+        self.coverSeed = UUID().uuidString
+    }
+}
+
+@Model
+final class ReadingSession {
+    var lastOpened: Date
+    var openCount: Int
+    var book: Book?
+
+    init(lastOpened: Date = .now, openCount: Int = 0) {
+        self.lastOpened = lastOpened
+        self.openCount = openCount
+    }
+}
+
+@Model
+final class Bookmark {
+    var label: String
+    var progress: Double
+    var createdAt: Date
+    var book: Book?
+
+    init(label: String, progress: Double, createdAt: Date = .now, book: Book? = nil) {
+        self.label = label
+        self.progress = progress
+        self.createdAt = createdAt
+        self.book = book
     }
 }
 
 struct ZipArchive {
+    struct Entry {
+        let name: String
+        let compressionMethod: UInt16
+        let compressedSize: UInt32
+        let uncompressedSize: UInt32
+        let localHeaderOffset: UInt32
+    }
+
     private let data: Data
-    private let entries: [String: ZipEntry]
+    let entries: [Entry]
 
-    init(data: Data) throws {
+    init?(data: Data) {
         self.data = data
-        self.entries = try ZipArchive.parseCentralDirectory(data: data)
+        guard let entries = ZipArchive.parseCentralDirectory(data: data) else { return nil }
+        self.entries = entries
     }
 
-    func contains(_ path: String) -> Bool {
-        entries[path] != nil
-    }
+    private static func parseCentralDirectory(data: Data) -> [Entry]? {
+        guard let eocdOffset = findEndOfCentralDirectory(in: data) else { return nil }
+        guard eocdOffset + 22 <= data.count else { return nil }
 
-    func fileNames() -> [String] {
-        Array(entries.keys)
-    }
+        let entryCount = data.readUInt16(at: eocdOffset + 10)
+        let centralDirectorySize = data.readUInt32(at: eocdOffset + 12)
+        let centralDirectoryOffset = data.readUInt32(at: eocdOffset + 16)
 
-    func data(for path: String) throws -> Data {
-        guard let entry = entries[path] else {
-            throw ZipArchiveError.entryNotFound
-        }
-        return try extract(entry)
-    }
-
-    private static func parseCentralDirectory(data: Data) throws -> [String: ZipEntry] {
-        guard let eocdOffset = findEndOfCentralDirectory(data: data) else {
-            throw ZipArchiveError.invalidArchive
+        guard centralDirectoryOffset != 0xFFFFFFFF, entryCount != 0xFFFF else {
+            return nil
         }
 
-        let eocd = data[eocdOffset...]
-        let centralDirOffset = eocd.readUInt32(at: 16)
-        let entryCount = eocd.readUInt16(at: 10)
-
-        var entries: [String: ZipEntry] = [:]
-        var cursor = Int(centralDirOffset)
+        var entries: [Entry] = []
+        var offset = Int(centralDirectoryOffset)
+        let endOffset = offset + Int(centralDirectorySize)
 
         for _ in 0..<entryCount {
-            guard cursor + 46 <= data.count else { break }
-            let header = data[cursor...]
-            guard header.readUInt32(at: 0) == 0x02014b50 else { break }
+            guard offset + 46 <= data.count, offset + 46 <= endOffset else { break }
+            let signature = data.readUInt32(at: offset)
+            guard signature == 0x02014b50 else { break }
 
-            let compressionMethod = header.readUInt16(at: 10)
-            let compressedSize = header.readUInt32(at: 20)
-            let uncompressedSize = header.readUInt32(at: 24)
-            let nameLength = Int(header.readUInt16(at: 28))
-            let extraLength = Int(header.readUInt16(at: 30))
-            let commentLength = Int(header.readUInt16(at: 32))
-            let localHeaderOffset = header.readUInt32(at: 42)
+            let compressionMethod = data.readUInt16(at: offset + 10)
+            let compressedSize = data.readUInt32(at: offset + 20)
+            let uncompressedSize = data.readUInt32(at: offset + 24)
+            let nameLength = Int(data.readUInt16(at: offset + 28))
+            let extraLength = Int(data.readUInt16(at: offset + 30))
+            let commentLength = Int(data.readUInt16(at: offset + 32))
+            let localHeaderOffset = data.readUInt32(at: offset + 42)
 
-            let nameStart = cursor + 46
+            let nameStart = offset + 46
             guard nameStart + nameLength <= data.count else { break }
-            let nameData = data[nameStart..<(nameStart + nameLength)]
+            let nameData = data.subdata(in: nameStart..<nameStart + nameLength)
             let name = String(data: nameData, encoding: .utf8) ?? ""
 
-            entries[name] = ZipEntry(
+            entries.append(Entry(
                 name: name,
                 compressionMethod: compressionMethod,
                 compressedSize: compressedSize,
                 uncompressedSize: uncompressedSize,
                 localHeaderOffset: localHeaderOffset
-            )
+            ))
 
-            cursor = nameStart + nameLength + extraLength + commentLength
+            offset = nameStart + nameLength + extraLength + commentLength
         }
 
         return entries
     }
 
-    private static func findEndOfCentralDirectory(data: Data) -> Int? {
+    private static func findEndOfCentralDirectory(in data: Data) -> Int? {
         guard data.count >= 22 else { return nil }
-        let signature: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
-        let searchFloor = max(0, data.count - 65557)
-        var i = data.count - 4
-
-        while i >= searchFloor {
-            if data[i] == signature[0], data[i + 1] == signature[1],
-               data[i + 2] == signature[2], data[i + 3] == signature[3] {
+        let searchRange = max(0, data.count - 65557)
+        var i = data.count - 22
+        while i >= searchRange {
+            if data.readUInt32(at: i) == 0x06054b50 {
                 return i
             }
             i -= 1
@@ -126,1594 +263,434 @@ struct ZipArchive {
         return nil
     }
 
-    private func extract(_ entry: ZipEntry) throws -> Data {
-        guard Int(entry.localHeaderOffset) + 30 <= data.count else {
-            throw ZipArchiveError.invalidArchive
-        }
+    func contents(of entry: Entry) -> Data? {
+        let offset = Int(entry.localHeaderOffset)
+        guard offset + 30 <= data.count else { return nil }
+        guard data.readUInt32(at: offset) == 0x04034b50 else { return nil }
 
-        let localHeader = data[Int(entry.localHeaderOffset)...]
-        guard localHeader.readUInt32(at: 0) == 0x04034b50 else {
-            throw ZipArchiveError.invalidArchive
-        }
+        let nameLength = Int(data.readUInt16(at: offset + 26))
+        let extraLength = Int(data.readUInt16(at: offset + 28))
+        let dataStart = offset + 30 + nameLength + extraLength
+        guard dataStart + Int(entry.compressedSize) <= data.count else { return nil }
 
-        let nameLength = Int(localHeader.readUInt16(at: 26))
-        let extraLength = Int(localHeader.readUInt16(at: 28))
-        let dataStart = Int(entry.localHeaderOffset) + 30 + nameLength + extraLength
-        let dataEnd = dataStart + Int(entry.compressedSize)
-
-        guard dataEnd <= data.count else { throw ZipArchiveError.invalidArchive }
-
-        let maxPlausibleSize = max(data.count * 20, 200_000_000)
-        guard Int(entry.uncompressedSize) <= maxPlausibleSize else {
-            throw ZipArchiveError.implausibleEntrySize
-        }
-
-        let compressedData = data[dataStart..<dataEnd]
+        let compressedData = data.subdata(in: dataStart..<dataStart + Int(entry.compressedSize))
 
         switch entry.compressionMethod {
         case 0:
-            return Data(compressedData)
+            return compressedData
         case 8:
-            return try inflate(compressedData, uncompressedSize: Int(entry.uncompressedSize))
+            return ZipArchive.inflate(compressedData, expectedSize: Int(entry.uncompressedSize))
         default:
-            throw ZipArchiveError.decompressionFailed
+            return nil
         }
     }
 
-    private func inflate(_ compressed: Data, uncompressedSize: Int) throws -> Data {
-        guard uncompressedSize > 0 else { return Data() }
-
-        var result = Data(count: uncompressedSize)
-        let decodedCount = result.withUnsafeMutableBytes { destBuffer -> Int in
-            compressed.withUnsafeBytes { srcBuffer -> Int in
-                guard let destPointer = destBuffer.bindMemory(to: UInt8.self).baseAddress,
-                      let srcPointer = srcBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                    return 0
-                }
-                return compression_decode_buffer(
-                    destPointer, uncompressedSize,
-                    srcPointer, compressed.count,
-                    nil, COMPRESSION_ZLIB
-                )
+    private static func inflate(_ data: Data, expectedSize: Int) -> Data? {
+        guard expectedSize > 0 else { return Data() }
+        var destBuffer = [UInt8](repeating: 0, count: expectedSize)
+        let result = data.withUnsafeBytes { (srcPtr: UnsafeRawBufferPointer) -> Int in
+            guard let srcBase = srcPtr.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return destBuffer.withUnsafeMutableBufferPointer { destPtr -> Int in
+                guard let destBase = destPtr.baseAddress else { return 0 }
+                return compression_decode_buffer(destBase, expectedSize, srcBase, data.count, nil, COMPRESSION_ZLIB)
             }
         }
-
-        guard decodedCount == uncompressedSize else {
-            throw ZipArchiveError.decompressionFailed
-        }
-
-        return result
+        guard result > 0 else { return nil }
+        return Data(destBuffer[0..<result])
     }
 }
 
 private extension Data {
     func readUInt16(at offset: Int) -> UInt16 {
-        let start = self.startIndex + offset
-        return UInt16(self[start]) | (UInt16(self[start + 1]) << 8)
+        guard offset + 2 <= count else { return 0 }
+        return UInt16(self[self.startIndex + offset]) | (UInt16(self[self.startIndex + offset + 1]) << 8)
     }
 
     func readUInt32(at offset: Int) -> UInt32 {
-        let start = self.startIndex + offset
-        var value: UInt32 = 0
-        for i in 0..<4 {
-            value |= UInt32(self[start + i]) << (8 * i)
-        }
-        return value
+        guard offset + 4 <= count else { return 0 }
+        let b0 = UInt32(self[self.startIndex + offset])
+        let b1 = UInt32(self[self.startIndex + offset + 1])
+        let b2 = UInt32(self[self.startIndex + offset + 2])
+        let b3 = UInt32(self[self.startIndex + offset + 3])
+        return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
     }
-}
-
-struct EPUBDocument {
-    let title: String
-    let content: String
-}
-
-enum EPUBParserError: Error {
-    case missingContainer
-    case missingOPF
-    case invalidStructure
 }
 
 struct EPUBParser {
-    private static let tagRegex = try! NSRegularExpression(pattern: "<[^>]+>")
-    private static let multipleNewlinesRegex = try! NSRegularExpression(pattern: "\\n{3,}")
-    private static let scriptStyleRegex = try! NSRegularExpression(
-        pattern: "<(script|style)[^>]*>[\\s\\S]*?</\\1>",
-        options: .caseInsensitive
-    )
-    private static let blockTags = [
-        "</p>", "<br>", "<br/>", "<br />",
-        "</div>", "</li>",
-        "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>"
-    ]
-    
-    static func parse(data: Data) throws -> EPUBDocument {
-        let archive = try ZipArchive(data: data)
+    struct ParsedBook {
+        let title: String?
+        let author: String?
+        let content: String
+    }
 
-        guard archive.contains("META-INF/container.xml") else {
-            throw EPUBParserError.missingContainer
-        }
-        let containerData = try archive.data(for: "META-INF/container.xml")
+    static func parse(data: Data) -> ParsedBook? {
+        guard let archive = ZipArchive(data: data) else { return nil }
 
-        guard let opfPath = extractOPFPath(from: containerData) else {
-            throw EPUBParserError.missingOPF
+        guard let containerEntry = archive.entries.first(where: { $0.name == "META-INF/container.xml" }),
+              let containerData = archive.contents(of: containerEntry),
+              let containerXML = String(data: containerData, encoding: .utf8) else {
+            return nil
         }
 
-        let opfData = try archive.data(for: opfPath)
+        guard let opfPath = extractOPFPath(from: containerXML) else { return nil }
+
+        guard let opfEntry = archive.entries.first(where: { $0.name == opfPath }),
+              let opfData = archive.contents(of: opfEntry),
+              let opfXML = String(data: opfData, encoding: .utf8) else {
+            return nil
+        }
+
         let basePath = (opfPath as NSString).deletingLastPathComponent
 
-        let (manifest, spineOrder, parsedTitle) = parseOPF(data: opfData)
+        let title = extractTag("dc:title", from: opfXML)
+        let author = extractTag("dc:creator", from: opfXML)
 
-        var combinedText = ""
-        let maxChaptersToProcess = 2000
-        for (index, itemID) in spineOrder.enumerated() {
-            guard index < maxChaptersToProcess else { break }
-            guard let href = manifest[itemID] else { continue }
+        let manifest = extractManifest(from: opfXML)
+        let spine = extractSpine(from: opfXML)
+
+        var fullText = ""
+        for idref in spine {
+            guard let href = manifest[idref] else { continue }
             let fullPath = basePath.isEmpty ? href : "\(basePath)/\(href)"
-            let resolvedPath = fullPath.removingPercentEncoding ?? fullPath
+            guard let entry = archive.entries.first(where: { $0.name == fullPath || $0.name == href }),
+                  let itemData = archive.contents(of: entry),
+                  let html = String(data: itemData, encoding: .utf8) else { continue }
 
-            guard let chapterData = try? archive.data(for: resolvedPath),
-                  let html = String(data: chapterData, encoding: .utf8) else { continue }
-            
-            combinedText += htmlToPlainText(html) + "\n\n"
+            fullText += stripHTML(html)
+            fullText += "\n\n"
         }
-        let trimmed = combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw EPUBParserError.invalidStructure }
 
-        return EPUBDocument(title: parsedTitle ?? "Без названия", content: trimmed)
+        return ParsedBook(title: title, author: author, content: fullText.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private static func extractOPFPath(from data: Data) -> String? {
-        let delegate = ContainerXMLDelegate()
-        let xmlParser = XMLParser(data: data)
-        xmlParser.delegate = delegate
-        xmlParser.parse()
-        return delegate.opfPath
+    private static func extractOPFPath(from xml: String) -> String? {
+        guard let range = xml.range(of: "full-path=\"") else { return nil }
+        let rest = xml[range.upperBound...]
+        guard let endRange = rest.range(of: "\"") else { return nil }
+        return String(rest[..<endRange.lowerBound])
     }
 
-    private static func parseOPF(data: Data) -> (manifest: [String: String], spine: [String], title: String?) {
-        let delegate = OPFXMLDelegate()
-        let xmlParser = XMLParser(data: data)
-        xmlParser.delegate = delegate
-        xmlParser.parse()
-        return (delegate.manifest, delegate.spineOrder, delegate.title)
+    private static func extractTag(_ tag: String, from xml: String) -> String? {
+        guard let startRange = xml.range(of: "<\(tag)") else { return nil }
+        guard let contentStart = xml.range(of: ">", range: startRange.upperBound..<xml.endIndex) else { return nil }
+        guard let endRange = xml.range(of: "</\(tag)>", range: contentStart.upperBound..<xml.endIndex) else { return nil }
+        return String(xml[contentStart.upperBound..<endRange.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func htmlToPlainText(_ html: String) -> String {
-            var text = html
-
-            let scriptRange = NSRange(text.startIndex..<text.endIndex, in: text)
-            text = scriptStyleRegex.stringByReplacingMatches(in: text, range: scriptRange, withTemplate: "")
-
-            for tag in blockTags {
-                text = text.replacingOccurrences(of: tag, with: "\n", options: .caseInsensitive)
-            }
-
-            let tagsRange = NSRange(text.startIndex..<text.endIndex, in: text)
-            text = tagRegex.stringByReplacingMatches(in: text, range: tagsRange, withTemplate: "")
-
-            let entities: [String: String] = [
-                "&amp;": "&", "&lt;": "<", "&gt;": ">",
-                "&quot;": "\"", "&#39;": "'", "&nbsp;": " "
-            ]
-            for (entity, replacement) in entities {
-                text = text.replacingOccurrences(of: entity, with: replacement)
-            }
-
-            let newlinesRange = NSRange(text.startIndex..<text.endIndex, in: text)
-            text = multipleNewlinesRegex.stringByReplacingMatches(in: text, range: newlinesRange, withTemplate: "\n\n")
-
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    }
-
-
-private final class ContainerXMLDelegate: NSObject, XMLParserDelegate {
-    var opfPath: String?
-
-    func parser(
-        _ parser: XMLParser,
-        didStartElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?,
-        attributes attributeDict: [String: String]
-    ) {
-        if elementName == "rootfile" {
-            opfPath = attributeDict["full-path"]
-        }
-    }
-}
-
-private final class OPFXMLDelegate: NSObject, XMLParserDelegate {
-    var manifest: [String: String] = [:]
-    var spineOrder: [String] = []
-    var title: String?
-
-    private var isInsideTitle = false
-
-    func parser(
-        _ parser: XMLParser,
-        didStartElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?,
-        attributes attributeDict: [String: String]
-    ) {
-        let tag = stripNamespace(elementName)
-
-        switch tag {
-        case "item":
-            if let id = attributeDict["id"], let href = attributeDict["href"] {
+    private static func extractManifest(from xml: String) -> [String: String] {
+        var manifest: [String: String] = [:]
+        let scanner = Scanner(string: xml)
+        while scanner.scanUpToString("<item ") != nil {
+            guard scanner.scanString("<item ") != nil else { break }
+            guard let tagEnd = scanner.scanUpToString("/>") ?? scanner.scanUpToString(">") else { continue }
+            let attrs = parseAttributes(from: tagEnd)
+            if let id = attrs["id"], let href = attrs["href"] {
                 manifest[id] = href
             }
-        case "itemref":
-            if let idref = attributeDict["idref"] {
-                spineOrder.append(idref)
-            }
-        case "title":
-            isInsideTitle = true
-        default:
-            break
         }
+        return manifest
     }
 
-    func parser(_ parser: XMLParser, foundCharacters string: String) {
-        guard isInsideTitle else { return }
-        title = (title ?? "") + string
+    private static func extractSpine(from xml: String) -> [String] {
+        var spine: [String] = []
+        let scanner = Scanner(string: xml)
+        guard scanner.scanUpToString("<spine") != nil, scanner.scanUpToString(">") != nil else {
+            return spine
+        }
+        while scanner.scanUpToString("<itemref ") != nil {
+            guard scanner.scanString("<itemref ") != nil else { break }
+            guard let tagEnd = scanner.scanUpToString("/>") ?? scanner.scanUpToString(">") else { continue }
+            let attrs = parseAttributes(from: tagEnd)
+            if let idref = attrs["idref"] {
+                spine.append(idref)
+            }
+            if scanner.scanUpToString("</spine>") != nil {
+                break
+            }
+        }
+        return spine
     }
 
-    func parser(
-        _ parser: XMLParser,
-        didEndElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?
-    ) {
-        guard stripNamespace(elementName) == "title" else { return }
-        isInsideTitle = false
-        title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func parseAttributes(from fragment: String) -> [String: String] {
+        var result: [String: String] = [:]
+        let pattern = #"(\w[\w-]*)="([^"]*)""#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
+        let nsString = fragment as NSString
+        let matches = regex.matches(in: fragment, range: NSRange(location: 0, length: nsString.length))
+        for match in matches {
+            guard match.numberOfRanges == 3 else { continue }
+            let key = nsString.substring(with: match.range(at: 1))
+            let value = nsString.substring(with: match.range(at: 2))
+            result[key] = value
+        }
+        return result
     }
 
-    private func stripNamespace(_ name: String) -> String {
-        guard let colonRange = name.range(of: ":") else { return name }
-        return String(name[colonRange.upperBound...])
+    private static func stripHTML(_ html: String) -> String {
+        var text = html
+        text = text.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: "</p>", with: "\n\n", options: .caseInsensitive)
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
+        text = text.replacingOccurrences(of: "&amp;", with: "&")
+        text = text.replacingOccurrences(of: "&lt;", with: "<")
+        text = text.replacingOccurrences(of: "&gt;", with: ">")
+        text = text.replacingOccurrences(of: "&quot;", with: "\"")
+        text = text.replacingOccurrences(of: "&#39;", with: "'")
+        return text
     }
 }
 
-@Model
-final class Book {
-    var title: String
-    var content: String
-    var dateAdded: Date
-    var fileExtension: String
-    var formatRawValue: String
-    var pdfData: Data?
-    var epubData: Data?
-
-    @Relationship(deleteRule: .cascade)
-    var readingSession: ReadingSession?
-
-    @Relationship(deleteRule: .cascade, inverse: \Bookmark.book)
-    var bookmarks: [Bookmark] = []
-
-    var format: BookFormat {
-        get { BookFormat(rawValue: formatRawValue) ?? .text }
-        set { formatRawValue = newValue.rawValue }
-    }
-
-    init(
-        title: String,
-        content: String,
-        fileExtension: String,
-        format: BookFormat,
-        pdfData: Data? = nil,
-        epubData: Data? = nil
-    ) {
-        self.title = title
-        self.content = content
-        self.dateAdded = .now
-        self.fileExtension = fileExtension
-        self.formatRawValue = format.rawValue
-        self.pdfData = pdfData
-        self.epubData = epubData
+enum TextDecoding {
+    static func decodeTextFile(_ data: Data) -> String {
+        let encodings: [String.Encoding] = [.utf8, .windowsCP1251, .isoLatin1]
+        for encoding in encodings {
+            if let string = String(data: data, encoding: encoding) {
+                return string
+            }
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
-@Model
-final class ReadingSession {
-    var scrollOffset: Double
-    var lastOpened: Date
-
-    init(scrollOffset: Double = 0, lastOpened: Date = .now) {
-        self.scrollOffset = scrollOffset
-        self.lastOpened = lastOpened
-    }
-}
-
-@Model
-final class Bookmark {
-    var scrollOffset: Double
-    var snippet: String
-    var dateCreated: Date
-    var book: Book?
-
-    init(scrollOffset: Double, snippet: String, book: Book?) {
-        self.scrollOffset = scrollOffset
-        self.snippet = snippet
-        self.dateCreated = .now
-        self.book = book
-    }
-}
-
-enum ReadingTheme: String, CaseIterable, Identifiable {
-    case light
-    case dark
-    case sepia
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .light: "Светлая"
-        case .dark: "Тёмная"
-        case .sepia: "Сепия"
-        }
-    }
-
-    var iconName: String {
-        switch self {
-        case .light: "sun.max"
-        case .dark: "moon"
-        case .sepia: "book.closed"
-        }
-    }
-
-    var backgroundColor: Color {
-        switch self {
-        case .light: Color(red: 1.0, green: 1.0, blue: 1.0)
-        case .dark: Color(red: 0.11, green: 0.11, blue: 0.12)
-        case .sepia: Color(red: 0.96, green: 0.91, blue: 0.79)
-        }
-    }
-
-    var textColor: Color {
-        switch self {
-        case .light: Color(red: 0.1, green: 0.1, blue: 0.1)
-        case .dark: Color(red: 0.92, green: 0.92, blue: 0.90)
-        case .sepia: Color(red: 0.30, green: 0.22, blue: 0.13)
-        }
-    }
-    
-    var colorScheme: ColorScheme {
-        switch self {
-        case .light, .sepia: .light
-        case .dark: .dark
-        }
-    }
-}
-
-enum ReadingFont: String, CaseIterable, Identifiable {
-    case serif
-    case sans
-    case monospace
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .serif: "Serif"
-        case .sans: "Sans"
-        case .monospace: "Monospace"
-        }
-    }
-
-    var design: Font.Design {
-        switch self {
-        case .serif: .serif
-        case .sans: .default
-        case .monospace: .monospaced
-        }
-    }
-}
-
-struct PDFKitView: NSViewRepresentable {
-    let data: Data
-    let initialProgress: Double
-    let onPageChanged: (Int, Int) -> Void
-
-    func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
-        view.autoScales = true
-        view.displayMode = .singlePageContinuous
-        let document = PDFDocument(data: data)
-        view.document = document
-
-        if let document, document.pageCount > 0, initialProgress > 0 {
-            let targetIndex = Int(initialProgress * Double(document.pageCount - 1))
-            if let page = document.page(at: targetIndex) {
-                view.go(to: page)
-            }
-        }
-
-        context.coordinator.pdfView = view
-        NotificationCenter.default.addObserver(
-            context.coordinator,
-            selector: #selector(Coordinator.pageChanged),
-            name: .PDFViewPageChanged,
-            object: view
-        )
-
-        return view
-    }
-
-    func updateNSView(_ nsView: PDFView, context: Context) {}
-
-    static func dismantleNSView(_ nsView: PDFView, coordinator: Coordinator) {
-        NotificationCenter.default.removeObserver(coordinator, name: .PDFViewPageChanged, object: nsView)
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPageChanged: onPageChanged)
-    }
-
-    final class Coordinator: NSObject {
-        weak var pdfView: PDFView?
-        let onPageChanged: (Int, Int) -> Void
-
-        init(onPageChanged: @escaping (Int, Int) -> Void) {
-            self.onPageChanged = onPageChanged
-        }
-
-        @objc func pageChanged() {
-            guard let pdfView, let page = pdfView.currentPage,
-                  let document = pdfView.document else { return }
-            onPageChanged(document.index(for: page), document.pageCount)
-        }
-    }
-}
-
-private func generatedColor(from string: String) -> Color {
-    var hash: UInt64 = 1469598103934665603
-    for byte in string.utf8 {
-        hash ^= UInt64(byte)
-        hash = hash &* 1099511628211
-    }
-    let hue = Double(hash % 360) / 360.0
-    return Color(hue: hue, saturation: 0.55, brightness: 0.85)
-}
-
-struct BookCoverView: View {
-    let title: String
-    var progress: Double = 0
-
-    private var initials: String {
-        let words = title.split(separator: " ")
-        let letters = words.prefix(2).compactMap { $0.first }
-        return String(letters).uppercased()
-    }
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 12)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        generatedColor(from: title),
-                        generatedColor(from: title).opacity(0.7)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .aspectRatio(2/3, contentMode: .fit)
-            .overlay {
-                Text(initials)
-                    .font(.system(size: 32, weight: .bold, design: .serif))
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-            .overlay(alignment: .bottom) {
-                if progress > 0.01 {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Rectangle()
-                                .fill(.white.opacity(0.25))
-                            Rectangle()
-                                .fill(.white)
-                                .frame(width: geo.size.width * progress)
-                        }
-                    }
-                    .frame(height: 4)
-                    .clipShape(RoundedCorner(radius: 12, corners: [.bottomLeft, .bottomRight]))
-                }
-            }
-            .shadow(color: .black.opacity(0.15), radius: 6, y: 4)
-    }
-}
-
-struct RoundedCorner: Shape {
-    var radius: CGFloat
-    var corners: RectCorner
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let topLeft = corners.contains(.topLeft) ? radius : 0
-        let topRight = corners.contains(.topRight) ? radius : 0
-        let bottomLeft = corners.contains(.bottomLeft) ? radius : 0
-        let bottomRight = corners.contains(.bottomRight) ? radius : 0
-
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - topRight, y: rect.minY))
-        path.addArc(center: CGPoint(x: rect.maxX - topRight, y: rect.minY + topRight), radius: topRight, startAngle: .degrees(-90), endAngle: .degrees(0), clockwise: false)
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomRight))
-        path.addArc(center: CGPoint(x: rect.maxX - bottomRight, y: rect.maxY - bottomRight), radius: bottomRight, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
-        path.addLine(to: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY))
-        path.addArc(center: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY - bottomLeft), radius: bottomLeft, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeft))
-        path.addArc(center: CGPoint(x: rect.minX + topLeft, y: rect.minY + topLeft), radius: topLeft, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
-        path.closeSubpath()
-        return path
-    }
-}
-
-struct RectCorner: OptionSet {
-    let rawValue: Int
-    static let topLeft = RectCorner(rawValue: 1 << 0)
-    static let topRight = RectCorner(rawValue: 1 << 1)
-    static let bottomLeft = RectCorner(rawValue: 1 << 2)
-    static let bottomRight = RectCorner(rawValue: 1 << 3)
-}
-
-struct LibraryBookCell: View {
-    let book: Book
-    let onOpen: () -> Void
-    let onDelete: () -> Void
-    let onRename: (String) -> Void
-
-    @State private var isHovering = false
-    @State private var showingDeleteConfirmation = false
-    @State private var showingRenameAlert = false
-    @State private var renameText = ""
-
-    private var progress: Double {
-        guard book.modelContext != nil else { return 0 }
-        return book.readingSession?.scrollOffset ?? 0
-    }
-
-    var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 8) {
-                BookCoverView(title: book.title, progress: progress)
-                    .scaleEffect(isHovering ? 1.03 : 1.0)
-                    .shadow(
-                        color: .black.opacity(isHovering ? 0.25 : 0.15),
-                        radius: isHovering ? 10 : 6,
-                        y: isHovering ? 6 : 4
-                    )
-
-                Text(book.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-            }
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.15)) {
-                isHovering = hovering
-            }
-        }
-        .contextMenu {
-            Button {
-                renameText = book.title
-                showingRenameAlert = true
-            } label: {
-                Label("Переименовать", systemImage: "pencil")
-            }
-
-            Divider()
-
-            Button(role: .destructive) {
-                showingDeleteConfirmation = true
-            } label: {
-                Label("Удалить книгу", systemImage: "trash")
-            }
-        }
-        .confirmationDialog(
-            "Удалить «\(book.title)»?",
-            isPresented: $showingDeleteConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Удалить", role: .destructive) {
-                onDelete()
-            }
-            Button("Отмена", role: .cancel) {}
-        } message: {
-            Text("Книга и весь прогресс чтения будут удалены без возможности восстановления.")
-        }
-        .alert("Переименовать книгу", isPresented: $showingRenameAlert) {
-            TextField("Название книги", text: $renameText)
-
-            Button("Сохранить") {
-                let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    onRename(trimmed)
-                }
-            }
-
-            Button("Отмена", role: .cancel) {}
-        }
-    }
-}
-
-struct BookmarkRow: View {
-    let bookmark: Bookmark
-    let onOpen: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(bookmark.book?.title ?? "Неизвестная книга")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(bookmark.snippet)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovering ? Color.primary.opacity(0.06) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                isHovering = hovering
-            }
-        }
-    }
-}
-
-struct SidebarRow: View {
-    let title: String
-    let systemImage: String
-    let isSelected: Bool
-    var trailingText: String? = nil
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Label(title, systemImage: systemImage)
-                Spacer()
-                if let trailingText {
-                    Text(trailingText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
-                }
-            }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(
-                        isSelected
-                            ? Color.accentColor.opacity(0.18)
-                            : (isHovering ? Color.primary.opacity(0.06) : Color.clear)
-                    )
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                isHovering = hovering
-            }
-        }
-    }
-}
-
-struct ToolbarIconButton: View {
-    let systemName: String
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .foregroundStyle(.primary)
-                .opacity(isHovering ? 1.0 : 0.65)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                isHovering = hovering
-            }
-        }
-    }
-}
-
-struct ReaderToolbarContent: ToolbarContent {
-    let onClose: () -> Void
-    @Binding var isFocusMode: Bool
-    let onAddBookmark: () -> Void
-    @Binding var themeRawValue: String
-    @Binding var fontRawValue: String
-    let themeIcon: String
-    @Binding var fontSize: Double
-    let showsTextControls: Bool
-
-    var body: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button(action: onClose) {
-                Label("К библиотеке", systemImage: "chevron.left")
-            }
-        }
-
-        ToolbarItemGroup(placement: .primaryAction) {
-            ToolbarIconButton(
-                systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
-            ) {
-                isFocusMode.toggle()
-            }
-            .keyboardShortcut("f", modifiers: [.command, .shift])
-
-            ToolbarIconButton(systemName: "bookmark", action: onAddBookmark)
-
-            if showsTextControls {
-                Menu {
-                    Picker("Тема", selection: $themeRawValue) {
-                        ForEach(ReadingTheme.allCases) { theme in
-                            Label(theme.displayName, systemImage: theme.iconName)
-                                .tag(theme.rawValue)
-                        }
-                    }
-                    .pickerStyle(.inline)
-
-                    Picker("Шрифт", selection: $fontRawValue) {
-                        ForEach(ReadingFont.allCases) { font in
-                            Text(font.displayName)
-                                .tag(font.rawValue)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    Image(systemName: themeIcon)
-                }
-
-                ToolbarIconButton(systemName: "textformat.size.smaller") {
-                    fontSize = max(13, fontSize - 1)
-                }
-                .disabled(fontSize <= 13)
-
-                ToolbarIconButton(systemName: "textformat.size.larger") {
-                    fontSize = min(28, fontSize + 1)
-                }
-                .disabled(fontSize >= 28)
-            }
-        }
-    }
-}
-
-struct EmptyLibraryView: View {
-    let errorMessage: String?
-    let onOpenBook: () -> Void
-
-    var body: some View {
-        VStack(spacing: 16) {
-            ZStack {
-                Circle()
-                    .fill(.tint.opacity(0.12))
-                    .frame(width: 120, height: 120)
-
-                Image(systemName: "book.pages")
-                    .font(.system(size: 52, weight: .thin))
-                    .foregroundStyle(.tint)
-            }
-
-            Text("BookReaderSwift")
-                .font(.system(size: 32, weight: .semibold, design: .serif))
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.subheadline)
-                    .foregroundStyle(.red)
-            } else {
-                Text("Открой файл .txt или .md, чтобы начать чтение")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button(action: onOpenBook) {
-                Label("Открыть книгу", systemImage: "folder")
-                    .padding(.horizontal, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.top, 8)
-        }
-    }
-}
-
-struct LibraryGridView: View {
-    let books: [Book]
-    let onSelect: (Book) -> Void
-    let onDelete: (Book) -> Void
-    let onRename: (Book, String) -> Void
-
-    private let columns = [
-        GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)
-    ]
-
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 28) {
-                ForEach(books) { book in
-                    LibraryBookCell(book: book) {
-                        onSelect(book)
-                    } onDelete: {
-                        onDelete(book)
-                    } onRename: { newTitle in
-                        onRename(book, newTitle)
-                    }
-                }
-            }
-            .padding(32)
-        }
-        .scrollIndicators(.hidden)
-    }
-}
-
-struct LibrarySectionView: View {
-    let count: Int
-    let isSelected: Bool
-    let onSelect: () -> Void
-
-    var body: some View {
-        Section("Моя коллекция") {
-            SidebarRow(
-                title: "Библиотека",
-                systemImage: "books.vertical",
-                isSelected: isSelected,
-                trailingText: "\(count)",
-                action: onSelect
-            )
-        }
-    }
-}
-
-struct BookmarksSectionView: View {
-    let bookmarks: [Bookmark]
-    let onOpen: (Bookmark) -> Void
-    let onDelete: (Bookmark) -> Void
-
-    var body: some View {
-        if !bookmarks.isEmpty {
-            Section("Закладки") {
-                ForEach(bookmarks) { bookmark in
-                    BookmarkRow(bookmark: bookmark) {
-                        onOpen(bookmark)
-                    }
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            onDelete(bookmark)
-                        } label: {
-                            Label("Удалить", systemImage: "trash")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct ReaderView: View {
+struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Bindable var book: Book
-    var initialScrollOverride: Double?
-    @Binding var isFocusMode: Bool
-    let onClose: () -> Void
+    @Query private var books: [Book]
 
-    @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
-    @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
+    @State private var currentBook: Book?
+    @State private var errorMessage: String?
+    @State private var isProcessingImport = false
+    @State private var isImporterPresented = false
+    @State private var sortOrder: LibrarySortOrder = .recentlyAdded
+    @State private var renamingBook: Book?
+    @State private var renameText: String = ""
 
-    @State private var fontSize: Double = 17
-    @State private var scrollProgress: Double = 0
-    @State private var scrollPosition = ScrollPosition()
-    @State private var hasRestoredPosition = false
-
-    @State private var searchText = ""
-    @State private var isSearching = false
-    @State private var currentMatchIndex = 0
-    @State private var lastScrollGeometry: ScrollGeometry?
-    @State private var isHoveringTop = false
-
-    @State private var paragraphs: [String] = []
-    @State private var totalContentLength: Int = 0
-    @State private var searchMatches: [ParagraphMatch] = []
-    @State private var matchesByParagraph: [Int: [Int]] = [:]
-    @State private var searchTask: Task<Void, Never>?
-
-    private var theme: ReadingTheme {
-        ReadingTheme(rawValue: themeRawValue) ?? .light
-    }
-
-    private var font: ReadingFont {
-        ReadingFont(rawValue: fontRawValue) ?? .serif
-    }
-    
-    private struct ReaderTaskID: Equatable {
-        let bookID: PersistentIdentifier
-        let override: Double?
-    }
-
-    struct ParagraphMatch {
-        let paragraphIndex: Int
-        let rangeInParagraph: Range<String.Index>
-        let globalOffset: Int
+    private var sortedBooks: [Book] {
+        switch sortOrder {
+        case .title:
+            return books.sorted { $0.title.localizedCompare($1.title) == .orderedAscending }
+        case .author:
+            return books.sorted { ($0.author ?? "").localizedCompare($1.author ?? "") == .orderedAscending }
+        case .recentlyAdded:
+            return books.sorted { $0.importedAt > $1.importedAt }
+        case .recentlyOpened:
+            return books.sorted {
+                let lhs = $0.lastOpenedDate ?? .distantPast
+                let rhs = $1.lastOpenedDate ?? .distantPast
+                return lhs > rhs
+            }
+        }
     }
 
     var body: some View {
-        Group {
-            if book.format == .pdf {
-                pdfReaderBody
-            } else {
-                textReaderBody
-            }
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            detail
         }
-        .preferredColorScheme(theme.colorScheme)
-        .onExitCommand {
-            if isFocusMode {
-                isFocusMode = false
-            }
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [
+                .plainText,
+                .pdf,
+                UTType(filenameExtension: "md") ?? .plainText,
+                UTType(filenameExtension: "epub") ?? .data
+            ],
+            allowsMultipleSelection: false
+        ) { result in
+            handleImportResult(result)
         }
-        .task(id: ReaderTaskID(bookID: book.persistentModelID, override: initialScrollOverride)) {
-            let content = book.content
-            let computed = await Task.detached(priority: .userInitiated) {
-                content
-                    .components(separatedBy: "\n\n")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-            }.value
-
-            paragraphs = computed
-            totalContentLength = content.count
-            hasRestoredPosition = false
-            searchText = ""
-            currentMatchIndex = 0
-            searchMatches = []
-            matchesByParagraph = [:]
-            lastScrollGeometry = nil
-        }
-        .onChange(of: searchText) { _, newValue in
-            searchTask?.cancel()
-            searchTask = Task {
-                try? await Task.sleep(for: .milliseconds(200))
-                guard !Task.isCancelled else { return }
-                recomputeSearchMatches()
-                currentMatchIndex = 0
-                scrollToCurrentMatch()
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
-            fontSize = min(28, fontSize + 1)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .decreaseFontSizeRequested)) { _ in
-            fontSize = max(13, fontSize - 1)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
-            if book.format != .pdf {
-                isSearching = true
-            }
-        }
-        .toolbar {
-            ReaderToolbarContent(
-                onClose: onClose,
-                isFocusMode: $isFocusMode,
-                onAddBookmark: addBookmark,
-                themeRawValue: $themeRawValue,
-                fontRawValue: $fontRawValue,
-                themeIcon: theme.iconName,
-                fontSize: $fontSize,
-                showsTextControls: book.format != .pdf
-            )
-        }
-    }
-
-    private var pdfReaderBody: some View {
-        ZStack(alignment: .top) {
-            if let pdfData = book.pdfData {
-                PDFKitView(
-                    data: pdfData,
-                    initialProgress: initialScrollOverride ?? book.readingSession?.scrollOffset ?? 0
-                ) { page, pageCount in
-                    savePDFProgress(page: page, pageCount: pageCount)
+        .alert("Переименовать книгу", isPresented: Binding(
+            get: { renamingBook != nil },
+            set: { if !$0 { renamingBook = nil } }
+        )) {
+            TextField("Название", text: $renameText)
+            Button("Сохранить") {
+                if let book = renamingBook {
+                    renameBook(book, to: renameText)
                 }
+                renamingBook = nil
             }
-
-            focusModeOverlay
+            Button("Отмена", role: .cancel) { renamingBook = nil }
         }
-    }
-
-    private var textReaderBody: some View {
-        ZStack(alignment: .top) {
-            VStack(spacing: 0) {
-                ProgressView(value: scrollProgress)
-                    .progressViewStyle(.linear)
-                    .tint(.accentColor)
-                    .frame(height: 2)
-                    .opacity(scrollProgress > 0 ? 1 : 0)
-                    .animation(.easeOut(duration: 0.2), value: scrollProgress)
-
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 20) {
-                        Text(book.title)
-                            .font(.system(size: 26, weight: .bold, design: font.design))
-                            .foregroundStyle(theme.textColor)
-                            .padding(.bottom, 8)
-
-                        ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
-                            Text(highlightedParagraph(at: index, text: paragraph))
-                                .font(.system(size: fontSize, weight: .regular, design: font.design))
-                                .lineSpacing(fontSize * 0.5)
-                                .foregroundStyle(theme.textColor.opacity(0.9))
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .frame(maxWidth: 640, alignment: .leading)
-                    .padding(.vertical, 64)
-                    .padding(.horizontal, 40)
-                    .frame(maxWidth: .infinity)
-                }
-                .scrollIndicators(.hidden)
-                .scrollPosition($scrollPosition)
-                .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
-                    handleScrollChange(geometry)
-                }
-            }
-            .background(theme.backgroundColor)
-
-            focusModeOverlay
-        }
-        .searchable(text: $searchText, isPresented: $isSearching, placement: .toolbar, prompt: "Поиск по книге")
-        .safeAreaInset(edge: .bottom) {
-            if !searchText.isEmpty {
-                searchResultsBar
+        .overlay {
+            if isProcessingImport {
+                ProcessingOverlay()
             }
         }
     }
 
     @ViewBuilder
-    private var focusModeOverlay: some View {
-        if isFocusMode {
-            VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        isFocusMode = false
-                    } label: {
-                        Image(systemName: "arrow.down.right.and.arrow.up.left")
-                            .foregroundStyle(.primary)
-                            .padding(10)
-                            .background(.thinMaterial, in: Circle())
-                            .overlay(
-                                Circle().strokeBorder(.primary.opacity(0.1), lineWidth: 1)
-                            )
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Picker("Сортировка", selection: $sortOrder) {
+                    ForEach(LibrarySortOrder.allCases) { order in
+                        Text(order.displayName).tag(order)
                     }
-                    .buttonStyle(.plain)
-                    .opacity(isHoveringTop ? 1.0 : 0.45)
-                    .padding(.top, 12)
-                    .padding(.trailing, 16)
                 }
-                Spacer()
-            }
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isHoveringTop = hovering
-                }
-            }
-            .allowsHitTesting(true)
-        }
-    }
-
-    private var searchResultsBar: some View {
-        HStack {
-            if searchMatches.isEmpty {
-                Text("Ничего не найдено")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("\(currentMatchIndex + 1) из \(searchMatches.count)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .labelsHidden()
+                .pickerStyle(.menu)
 
                 Spacer()
 
-                Button {
-                    goToMatch(offset: -1)
-                } label: {
-                    Image(systemName: "chevron.up")
+                ToolbarIconButton(systemImage: "plus") {
+                    isImporterPresented = true
                 }
-                .disabled(searchMatches.count < 2)
-
-                Button {
-                    goToMatch(offset: 1)
-                } label: {
-                    Image(systemName: "chevron.down")
-                }
-                .disabled(searchMatches.count < 2)
             }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.thinMaterial)
-    }
+            .padding(8)
 
-    private func recomputeSearchMatches() {
-        guard !searchText.isEmpty else {
-            searchMatches = []
-            matchesByParagraph = [:]
-            return
-        }
+            Divider()
 
-        var matches: [ParagraphMatch] = []
-        var byParagraph: [Int: [Int]] = [:]
-        var globalOffset = 0
-
-        for (index, paragraph) in paragraphs.enumerated() {
-            var searchStart = paragraph.startIndex
-            while let range = paragraph.range(
-                of: searchText,
-                options: .caseInsensitive,
-                range: searchStart..<paragraph.endIndex
-            ) {
-                let offsetInParagraph = paragraph.distance(from: paragraph.startIndex, to: range.lowerBound)
-                let matchIndex = matches.count
-                matches.append(
-                    ParagraphMatch(
-                        paragraphIndex: index,
-                        rangeInParagraph: range,
-                        globalOffset: globalOffset + offsetInParagraph
-                    )
+            List(selection: $currentBook) {
+                LibrarySectionView(
+                    books: sortedBooks,
+                    currentBook: $currentBook,
+                    onRename: { book in
+                        renamingBook = book
+                        renameText = book.title
+                    },
+                    onDelete: deleteBook
                 )
-                byParagraph[index, default: []].append(matchIndex)
-                searchStart = range.upperBound
-            }
-            globalOffset += paragraph.count + 2
-        }
 
-        searchMatches = matches
-        matchesByParagraph = byParagraph
-    }
-
-    private func highlightedParagraph(at index: Int, text: String) -> AttributedString {
-        guard let matchIndices = matchesByParagraph[index], !matchIndices.isEmpty else {
-            return AttributedString(text)
-        }
-
-        var attributed = AttributedString(text)
-        for matchIndex in matchIndices {
-            let match = searchMatches[matchIndex]
-            guard let attrRange = Range<AttributedString.Index>(match.rangeInParagraph, in: attributed) else { continue }
-            attributed[attrRange].backgroundColor = matchIndex == currentMatchIndex
-                ? Color.orange.opacity(0.6)
-                : Color.yellow.opacity(0.35)
-        }
-        return attributed
-    }
-
-    private func goToMatch(offset: Int) {
-        guard !searchMatches.isEmpty else { return }
-        let count = searchMatches.count
-        currentMatchIndex = ((currentMatchIndex + offset) % count + count) % count
-        scrollToCurrentMatch()
-    }
-
-    private func scrollToCurrentMatch() {
-        guard let geometry = lastScrollGeometry, !searchMatches.isEmpty, totalContentLength > 0 else { return }
-        let maxOffset = geometry.contentSize.height - geometry.containerSize.height
-        guard maxOffset > 0 else { return }
-
-        let match = searchMatches[currentMatchIndex]
-        let progress = Double(match.globalOffset) / Double(totalContentLength)
-
-        scrollPosition.scrollTo(y: progress * maxOffset)
-    }
-
-    private func handleScrollChange(_ geometry: ScrollGeometry) {
-        lastScrollGeometry = geometry
-
-        let maxOffset = geometry.contentSize.height - geometry.containerSize.height
-        guard maxOffset > 0 else { return }
-
-        let progress = min(max(geometry.contentOffset.y / maxOffset, 0), 1)
-        scrollProgress = progress
-
-        if !hasRestoredPosition {
-            hasRestoredPosition = true
-            let savedProgress = initialScrollOverride ?? book.readingSession?.scrollOffset ?? 0
-            if savedProgress > 0.01 {
-                scrollPosition.scrollTo(y: savedProgress * maxOffset)
-            }
-            return
-        }
-
-        saveProgress(progress)
-    }
-
-    private func saveProgress(_ progress: Double) {
-        guard book.modelContext != nil else { return }
-
-        if let session = book.readingSession {
-            session.scrollOffset = progress
-            session.lastOpened = .now
-        } else {
-            book.readingSession = ReadingSession(scrollOffset: progress)
-        }
-    }
-    
-    private func savePDFProgress(page: Int, pageCount: Int) {
-        guard book.modelContext != nil else { return }
-        guard pageCount > 0 else { return }
-        let progress = Double(page) / Double(max(pageCount - 1, 1))
-
-        if let session = book.readingSession {
-            session.scrollOffset = progress
-            session.lastOpened = .now
-        } else {
-            book.readingSession = ReadingSession(scrollOffset: progress)
-        }
-    }
-    
-    private func addBookmark() {
-        guard book.modelContext != nil else { return }
-
-        let progress = scrollProgress
-        let approximateCharIndex = Int(Double(totalContentLength) * progress)
-
-        var cumulative = 0
-        var snippetSource = paragraphs.first ?? ""
-        for paragraph in paragraphs {
-            let paragraphLength = paragraph.count + 2
-            if cumulative + paragraphLength > approximateCharIndex {
-                snippetSource = paragraph
-                break
-            }
-            cumulative += paragraphLength
-        }
-
-        let snippetText = snippetSource.prefix(80).trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let bookmark = Bookmark(
-            scrollOffset: progress,
-            snippet: snippetText.isEmpty ? "Начало книги" : snippetText,
-            book: book
-        )
-        modelContext.insert(bookmark)
-    }
-}
-
-struct ContentView: View {
-    
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
-    @Query(sort: \Bookmark.dateCreated, order: .reverse) private var bookmarks: [Bookmark]
-    
-    @State private var dataStoreWarningMessage: String?
-    @State private var isImporting = false
-    @State private var currentBook: Book?
-    @State private var pendingScrollTarget: Double?
-    @State private var errorMessage: String?
-    @State private var sidebarSelection: String? = "library"
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
-    @State private var isFocusMode = false
-    @State private var isProcessingImport = false
-    
-    private var markdownType: UTType {
-        UTType(filenameExtension: "md") ?? .plainText
-    }
-    
-    private var epubType: UTType {
-        UTType(filenameExtension: "epub") ?? UTType(importedAs: "org.idpf.epub-container")
-    }
-    
-    var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebarView
-        } detail: {
-            Group {
                 if let currentBook {
-                    ReaderView(
+                    BookmarksSectionView(
                         book: currentBook,
-                        initialScrollOverride: pendingScrollTarget,
-                        isFocusMode: $isFocusMode
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            self.currentBook = nil
-                            self.pendingScrollTarget = nil
-                        }
-                    }
-                    .id(currentBook.persistentModelID)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.98)),
-                        removal: .opacity
-                    ))
-                } else {
-                    libraryView
-                        .transition(.opacity)
+                        onSelect: { bookmark in
+                            openBookmark(bookmark, in: currentBook)
+                        },
+                        onDelete: deleteBookmark
+                    )
                 }
             }
-            .animation(.easeInOut(duration: 0.25), value: currentBook)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.background)
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        isImporting = true
-                    } label: {
-                        Label("Открыть книгу", systemImage: "folder")
-                    }
-                }
+            .listStyle(.sidebar)
+        }
+        .frame(minWidth: 220)
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        if let currentBook {
+            ReaderView(book: currentBook, onClose: {
+                self.currentBook = nil
+            })
+            .id(currentBook.persistentModelID)
+            .transition(.opacity)
+            .onAppear {
+                markBookOpened(currentBook)
             }
-        }
-        .toolbar(isFocusMode ? .hidden : .automatic, for: .windowToolbar)
-        .fileImporter(
-            isPresented: $isImporting,
-            allowedContentTypes: [.plainText, markdownType, .pdf, epubType],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first {
-                    importBook(from: url)
-                }
-            case .failure(let error):
-                errorMessage = error.localizedDescription
+        } else if books.isEmpty {
+            EmptyLibraryView(errorMessage: errorMessage) {
+                isImporterPresented = true
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
-            isImporting = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .dataStoreResetOccurred)) { notification in
-            dataStoreWarningMessage = notification.userInfo?["message"] as? String
-        }
-        .alert(
-            "Внимание",
-            isPresented: Binding(
-                get: { dataStoreWarningMessage != nil },
-                set: { if !$0 { dataStoreWarningMessage = nil } }
+        } else {
+            LibraryGridView(
+                books: sortedBooks,
+                currentBook: $currentBook,
+                onRename: { book in
+                    renamingBook = book
+                    renameText = book.title
+                },
+                onDelete: deleteBook
             )
-        ) {
-            Button("Понятно") { dataStoreWarningMessage = nil }
-        } message: {
-            Text(dataStoreWarningMessage ?? "")
-        }
-        .onChange(of: isFocusMode) { _, newValue in
-            withAnimation(.easeInOut(duration: 0.25)) {
-                columnVisibility = newValue ? .detailOnly : .automatic
-            }
-        }
-        .overlay {
-            if isProcessingImport {
-                ZStack {
-                    Color.black.opacity(0.25)
-                        .ignoresSafeArea()
-                    
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .controlSize(.large)
-                        Text("Обрабатываем книгу…")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(24)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                }
-                .transition(.opacity)
-            }
         }
     }
-    
-    private var sidebarView: some View {
-        List {
-            LibrarySectionView(
-                count: books.count,
-                isSelected: sidebarSelection == "library"
-            ) {
-                sidebarSelection = "library"
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    currentBook = nil
-                    pendingScrollTarget = nil
-                }
-            }
 
-            BookmarksSectionView(bookmarks: bookmarks) { bookmark in
-                openBookmark(bookmark)
-            } onDelete: { bookmark in
-                deleteBookmark(bookmark)
-            }
-        }
-        .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
-        .listStyle(.sidebar)
-    }
-    
-    private var libraryView: some View {
-        Group {
-            if books.isEmpty {
-                EmptyLibraryView(errorMessage: errorMessage) {
-                    isImporting = true
-                }
-            } else {
-                LibraryGridView(books: books) { book in
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        currentBook = book
-                    }
-                } onDelete: { book in
-                    deleteBook(book)
-                } onRename: { book, newTitle in
-                    renameBook(book, to: newTitle)
-                }
-            }
+    private func handleImportResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            importFile(at: url)
+        case .failure(let error):
+            errorMessage = "Не удалось выбрать файл: \(error.localizedDescription)"
         }
     }
-    
-    private func importBook(from url: URL) {
-        let fileExtension = url.pathExtension.lowercased()
-        let title = url.deletingPathExtension().lastPathComponent
 
-        if fileExtension == "epub" {
-            importEPUB(from: url, title: title)
-            return
-        }
-
-        let didStartAccessing = url.startAccessingSecurityScopedResource()
+    private func importFile(at url: URL) {
+        let needsSecurityScope = url.startAccessingSecurityScopedResource()
         defer {
-            if didStartAccessing {
-                url.stopAccessingSecurityScopedResource()
-            }
+            if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
         }
 
-        switch fileExtension {
+        let ext = url.pathExtension.lowercased()
+
+        switch ext {
         case "pdf":
-            importPDF(from: url, title: title)
+            importPDF(at: url)
+        case "epub":
+            importEPUB(at: url)
         default:
-            importPlainText(from: url, title: title, fileExtension: fileExtension)
+            importPlainText(at: url, isMarkdown: ext == "md")
         }
     }
-    
-    private func importPlainText(from url: URL, title: String, fileExtension: String) {
-        guard let content = decodeTextFile(at: url) else {
-            errorMessage = "Файл повреждён или имеет неподдерживаемую кодировку."
-            return
-        }
 
-        let format: BookFormat = fileExtension == "md" ? .markdown : .text
-        let book = Book(title: title, content: content, fileExtension: fileExtension, format: format)
-        modelContext.insert(book)
-
-        do {
-            try modelContext.save()
-        } catch {
-            errorMessage = "Не удалось сохранить книгу: \(error.localizedDescription)"
-            return
-        }
-
-        currentBook = book
-        errorMessage = nil
-    }
-
-    private func decodeTextFile(at url: URL) -> String? {
-        var usedEncoding: String.Encoding = .utf8
-        if let content = try? String(contentsOf: url, usedEncoding: &usedEncoding) {
-            return content
-        }
-
-        guard let data = try? Data(contentsOf: url) else {
-            return nil
-        }
-
-        let fallbackEncodings: [String.Encoding] = [
-            .utf8,
-            .utf16,
-            .windowsCP1251,
-            .isoLatin1,
-            .macOSRoman
-        ]
-
-        for encoding in fallbackEncodings {
-            if let content = String(data: data, encoding: encoding) {
-                return content
-            }
-        }
-
-        return nil
-    }
-    
-    private func importPDF(from url: URL, title: String) {
+    private func importPDF(at url: URL) {
+        isProcessingImport = true
         do {
             let data = try Data(contentsOf: url)
-            let book = Book(title: title, content: "", fileExtension: "pdf", format: .pdf, pdfData: data)
+            let title = url.deletingPathExtension().lastPathComponent
+            let book = Book(title: title, format: .pdf, pdfData: data)
             modelContext.insert(book)
-            
-            do {
-                try modelContext.save()
-            } catch {
-                errorMessage = "Не удалось сохранить книгу: \(error.localizedDescription)"
-                return
-            }
-            
+            saveContext()
             currentBook = book
-            errorMessage = nil
         } catch {
-            errorMessage = "Не удалось прочитать PDF-файл."
+            errorMessage = "Не удалось импортировать PDF: \(error.localizedDescription)"
         }
+        isProcessingImport = false
     }
-    
-    private func importEPUB(from url: URL, title: String) {
+
+    private func importPlainText(at url: URL, isMarkdown: Bool) {
         isProcessingImport = true
-        
+        do {
+            let data = try Data(contentsOf: url)
+            let text = TextDecoding.decodeTextFile(data)
+            let title = url.deletingPathExtension().lastPathComponent
+            let book = Book(title: title, format: isMarkdown ? .md : .txt, content: text)
+            modelContext.insert(book)
+            saveContext()
+            currentBook = book
+        } catch {
+            errorMessage = "Не удалось импортировать файл: \(error.localizedDescription)"
+        }
+        isProcessingImport = false
+    }
+
+    private func importEPUB(at url: URL) {
+        isProcessingImport = true
         Task.detached(priority: .userInitiated) {
-            let didStartAccessing = url.startAccessingSecurityScopedResource()
-            defer {
-                if didStartAccessing {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-            
             do {
-                let rawData = try Data(contentsOf: url)
-                let document = try EPUBParser.parse(data: rawData)
-                
-                await MainActor.run {
-                    let resolvedTitle = document.title.isEmpty || document.title == "Без названия"
-                    ? title
-                    : document.title
-                    
-                    let book = Book(
-                        title: resolvedTitle,
-                        content: document.content,
-                        fileExtension: "epub",
-                        format: .epub,
-                        epubData: rawData
-                    )
-                    modelContext.insert(book)
-                    
-                    do {
-                        try modelContext.save()
-                        currentBook = book
-                        errorMessage = nil
-                    } catch {
-                        errorMessage = "Книга обработана, но не удалось сохранить её в библиотеку: \(error.localizedDescription)"
+                let data = try Data(contentsOf: url)
+                guard let parsed = EPUBParser.parse(data: data) else {
+                    await MainActor.run {
+                        errorMessage = "Не удалось разобрать EPUB-файл"
+                        isProcessingImport = false
                     }
-                    
+                    return
+                }
+                let title = parsed.title ?? url.deletingPathExtension().lastPathComponent
+                await MainActor.run {
+                    let book = Book(title: title, author: parsed.author, format: .epub, content: parsed.content, epubData: data)
+                    modelContext.insert(book)
+                    saveContext()
+                    currentBook = book
                     isProcessingImport = false
                 }
             } catch {
                 await MainActor.run {
+                    errorMessage = "Не удалось импортировать EPUB: \(error.localizedDescription)"
                     isProcessingImport = false
-                    errorMessage = "Не удалось разобрать EPUB-файл: \(error.localizedDescription)"
                 }
             }
         }
     }
-    
-    private func openBookmark(_ bookmark: Bookmark) {
-        guard let book = bookmark.book else { return }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            pendingScrollTarget = bookmark.scrollOffset
-            currentBook = book
-        }
+
+    private func openBookmark(_ bookmark: Bookmark, in book: Book) {
+        currentBook = book
+        book.lastProgress = bookmark.progress
+        saveContext()
     }
-    
+
     private func deleteBookmark(_ bookmark: Bookmark) {
         modelContext.delete(bookmark)
         do {
@@ -1722,8 +699,11 @@ struct ContentView: View {
             errorMessage = "Не удалось удалить закладку: \(error.localizedDescription)"
         }
     }
-    
+
     private func deleteBook(_ book: Book) {
+        if currentBook?.persistentModelID == book.persistentModelID {
+            currentBook = nil
+        }
         modelContext.delete(book)
         do {
             try modelContext.save()
@@ -1731,19 +711,654 @@ struct ContentView: View {
             errorMessage = "Не удалось удалить книгу: \(error.localizedDescription)"
         }
     }
-    
-    private func renameBook(_ book: Book, to newTitle: String) {
-        book.title = newTitle
 
+    private func renameBook(_ book: Book, to newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        book.title = trimmed
         do {
             try modelContext.save()
         } catch {
             errorMessage = "Не удалось переименовать книгу: \(error.localizedDescription)"
         }
     }
+
+    private func markBookOpened(_ book: Book) {
+        if let session = book.readingSession {
+            session.lastOpened = .now
+            session.openCount += 1
+        } else {
+            let session = ReadingSession(lastOpened: .now, openCount: 1)
+            session.book = book
+            book.readingSession = session
+            modelContext.insert(session)
+        }
+        do {
+            try modelContext.save()
+        } catch {
+            errorMessage = "Не удалось обновить историю чтения: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveContext() {
+        do {
+            try modelContext.save()
+        } catch {
+            errorMessage = "Не удалось сохранить изменения: \(error.localizedDescription)"
+        }
+    }
+}
+
+struct BookCoverView: View {
+    let book: Book
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(generatedColor(from: book.coverSeed))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Spacer()
+                Image(systemName: book.format.systemImage)
+                    .font(.title2)
+                    .foregroundStyle(.white.opacity(0.9))
+                Text(book.title)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+            }
+            .padding(10)
+        }
+        .aspectRatio(2 / 3, contentMode: .fit)
+    }
+
+    private func generatedColor(from seed: String) -> Color {
+        var hasher = Hasher()
+        hasher.combine(seed)
+        let hashValue = hasher.finalize()
+        let hue = Double(abs(hashValue) % 360) / 360.0
+        return Color(hue: hue, saturation: 0.55, brightness: 0.65)
+    }
+}
+
+struct LibraryBookCell: View {
+    let book: Book
+    let isSelected: Bool
+    var onRename: () -> Void
+    var onDelete: () -> Void
+
+    var body: some View {
+        VStack {
+            BookCoverView(book: book)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 3)
+                )
+
+            Text(book.title)
+                .font(.callout)
+                .lineLimit(1)
+        }
+        .contextMenu {
+            Button("Переименовать", action: onRename)
+            Button("Удалить", role: .destructive, action: onDelete)
+        }
+    }
+}
+
+struct LibraryGridView: View {
+    let books: [Book]
+    @Binding var currentBook: Book?
+    var onRename: (Book) -> Void
+    var onDelete: (Book) -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 20)]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 24) {
+                ForEach(books) { book in
+                    LibraryBookCell(
+                        book: book,
+                        isSelected: currentBook?.persistentModelID == book.persistentModelID,
+                        onRename: { onRename(book) },
+                        onDelete: { onDelete(book) }
+                    )
+                    .onTapGesture {
+                        currentBook = book
+                    }
+                }
+            }
+            .padding(24)
+        }
+    }
+}
+
+struct LibrarySectionView: View {
+    let books: [Book]
+    @Binding var currentBook: Book?
+    var onRename: (Book) -> Void
+    var onDelete: (Book) -> Void
+
+    var body: some View {
+        Section("Библиотека") {
+            ForEach(books) { book in
+                SidebarRow(book: book, isSelected: currentBook?.persistentModelID == book.persistentModelID)
+                    .tag(book)
+                    .contextMenu {
+                        Button("Переименовать") { onRename(book) }
+                        Button("Удалить", role: .destructive) { onDelete(book) }
+                    }
+            }
+        }
+    }
+}
+
+struct SidebarRow: View {
+    let book: Book
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: book.format.systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(book.title)
+                    .lineLimit(1)
+                if let author = book.author, !author.isEmpty {
+                    Text(author)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            if book.lastProgress > 0 {
+                Text("\(Int(book.lastProgress * 100))%")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+struct BookmarksSectionView: View {
+    let book: Book
+    var onSelect: (Bookmark) -> Void
+    var onDelete: (Bookmark) -> Void
+
+    var body: some View {
+        if !book.bookmarks.isEmpty {
+            Section("Закладки — \(book.title)") {
+                ForEach(book.bookmarks.sorted(by: { $0.createdAt < $1.createdAt })) { bookmark in
+                    BookmarkRow(bookmark: bookmark)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            onSelect(bookmark)
+                        }
+                        .contextMenu {
+                            Button("Удалить", role: .destructive) {
+                                onDelete(bookmark)
+                            }
+                        }
+                }
+            }
+        }
+    }
+}
+
+struct BookmarkRow: View {
+    let bookmark: Bookmark
+
+    var body: some View {
+        HStack {
+            Image(systemName: "bookmark.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(bookmark.label)
+                    .lineLimit(1)
+                Text("\(Int(bookmark.progress * 100))%")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+}
+
+struct EmptyLibraryView: View {
+    let errorMessage: String?
+    var onImport: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "books.vertical")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("Библиотека пуста")
+                .font(.title2)
+                .fontWeight(.semibold)
+            Text("Импортируйте книгу в формате TXT, Markdown, PDF или EPUB")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 4)
+            }
+
+            Button("Импортировать книгу", action: onImport)
+                .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: 400)
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct ToolbarIconButton: View {
+    let systemImage: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct ProcessingOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.3).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("Импорт книги…")
+                    .foregroundStyle(.white)
+            }
+            .padding(24)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
+struct ReaderToolbarContent: View {
+    @Bindable var book: Book
+    @Binding var theme: ReadingTheme
+    @Binding var font: ReadingFont
+    @Binding var fontSize: CGFloat
+    @Binding var isSearchActive: Bool
+    @Binding var searchText: String
+    let matchCount: Int
+    @Binding var currentMatchIndex: Int
+    var onClose: () -> Void
+    var onAddBookmark: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ToolbarIconButton(systemImage: "chevron.left", action: onClose)
+
+            Text(book.title)
+                .font(.headline)
+                .lineLimit(1)
+
+            Spacer()
+
+            if isSearchActive {
+                HStack {
+                    TextField("Поиск по тексту", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+
+                    if matchCount > 0 {
+                        Text("\(currentMatchIndex + 1)/\(matchCount)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button {
+                        guard matchCount > 0 else { return }
+                        currentMatchIndex = (currentMatchIndex + matchCount - 1) % matchCount
+                    } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(matchCount == 0)
+
+                    Button {
+                        guard matchCount > 0 else { return }
+                        currentMatchIndex = (currentMatchIndex + 1) % matchCount
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(matchCount == 0)
+                }
+            }
+
+            ToolbarIconButton(systemImage: isSearchActive ? "xmark.circle" : "magnifyingglass") {
+                isSearchActive.toggle()
+                if !isSearchActive { searchText = "" }
+            }
+
+            ToolbarIconButton(systemImage: "bookmark") {
+                onAddBookmark()
+            }
+
+            Menu {
+                Picker("Тема", selection: $theme) {
+                    ForEach(ReadingTheme.allCases) { theme in
+                        Text(theme.displayName).tag(theme)
+                    }
+                }
+                Picker("Шрифт", selection: $font) {
+                    ForEach(ReadingFont.allCases) { font in
+                        Text(font.displayName).tag(font)
+                    }
+                }
+                Stepper("Размер шрифта: \(Int(fontSize))", value: $fontSize, in: 12...28)
+            } label: {
+                Image(systemName: "textformat.size")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+}
+
+struct ReaderView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Bindable var book: Book
+    var onClose: () -> Void
+
+    @State private var paragraphs: [String] = []
+    @State private var totalContentLength: Int = 0
+    @State private var theme: ReadingTheme = .light
+    @State private var font: ReadingFont = .system
+    @State private var fontSize: CGFloat = 17
+    @State private var searchText: String = ""
+    @State private var searchMatches: [Range<String.Index>] = []
+    @State private var currentMatchIndex: Int = 0
+    @State private var isSearchActive = false
+    @State private var isAddingBookmark = false
+    @State private var newBookmarkLabel = ""
+    @State private var pdfDocument: PDFDocument?
+    @State private var pdfProgress: Double = 0
+    @State private var pdfPageIndex: Int = 0
+    @State private var isLoadingContent = true
+
+    private struct ReaderTaskID: Equatable {
+        let bookID: PersistentIdentifier
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ReaderToolbarContent(
+                book: book,
+                theme: $theme,
+                font: $font,
+                fontSize: $fontSize,
+                isSearchActive: $isSearchActive,
+                searchText: $searchText,
+                matchCount: searchMatches.count,
+                currentMatchIndex: $currentMatchIndex,
+                onClose: onClose,
+                onAddBookmark: { isAddingBookmark = true }
+            )
+
+            Divider()
+
+            content
+        }
+        .background(theme.backgroundColor)
+        .task(id: ReaderTaskID(bookID: book.persistentModelID)) {
+            await loadContent()
+        }
+        .onChange(of: searchText) { _, _ in
+            recomputeSearchMatches()
+        }
+        .onChange(of: pdfProgress) { _, newValue in
+            guard book.format == .pdf else { return }
+            book.lastProgress = newValue
+            saveProgress()
+        }
+        .onChange(of: pdfPageIndex) { _, newValue in
+            guard book.format == .pdf else { return }
+            book.lastPageIndex = newValue
+        }
+        .sheet(isPresented: $isAddingBookmark) {
+            addBookmarkSheet
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch book.format {
+        case .pdf:
+            if let pdfDocument {
+                PDFKitView(document: pdfDocument, currentPageIndex: $pdfPageIndex, progress: $pdfProgress)
+            } else {
+                ProgressView("Загрузка PDF…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        default:
+            if isLoadingContent {
+                ProgressView("Загрузка книги…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                textReader
+            }
+        }
+    }
+
+    private var textReader: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
+                        Text(paragraph)
+                            .font(font.font(size: fontSize))
+                            .foregroundStyle(theme.textColor)
+                            .textSelection(.enabled)
+                            .id(index)
+                            .padding(.horizontal)
+                    }
+                }
+                .padding(.vertical, 24)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onChange(of: geo.frame(in: .named("scroll")).minY) { _, minY in
+                                updateProgress(minY: minY, contentHeight: geo.size.height)
+                            }
+                    }
+                )
+            }
+            .coordinateSpace(name: "scroll")
+            .onAppear {
+                restoreTextPosition(proxy: proxy)
+            }
+        }
+    }
+
+    private var addBookmarkSheet: some View {
+        VStack(spacing: 16) {
+            Text("Новая закладка")
+                .font(.headline)
+            TextField("Название закладки", text: $newBookmarkLabel)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Отмена", role: .cancel) {
+                    isAddingBookmark = false
+                    newBookmarkLabel = ""
+                }
+                Spacer()
+                Button("Сохранить") {
+                    addBookmark()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 320)
+    }
+
+    private func loadContent() async {
+        isLoadingContent = true
+        switch book.format {
+        case .pdf:
+            let data = book.pdfData
+            let document = await Task.detached(priority: .userInitiated) {
+                data.flatMap { PDFDocument(data: $0) }
+            }.value
+            await MainActor.run {
+                self.pdfDocument = document
+                self.pdfProgress = book.lastProgress
+                self.isLoadingContent = false
+            }
+        default:
+            let content = book.content
+            let computedParagraphs = await Task.detached(priority: .userInitiated) {
+                content
+                    .components(separatedBy: "\n\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            }.value
+            await MainActor.run {
+                self.paragraphs = computedParagraphs
+                self.totalContentLength = content.count
+                self.isLoadingContent = false
+            }
+        }
+    }
+
+    private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
+        guard contentHeight > 0 else { return }
+        let scrolled = max(0, -minY)
+        let progress = min(max(Double(scrolled / contentHeight), 0), 1)
+        book.lastProgress = progress
+    }
+
+    private func restoreTextPosition(proxy: ScrollViewProxy) {
+        guard book.lastProgress > 0, !paragraphs.isEmpty else { return }
+        let index = min(Int(Double(paragraphs.count) * book.lastProgress), paragraphs.count - 1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            proxy.scrollTo(index, anchor: .top)
+        }
+    }
+
+    private func saveProgress() {
+        do {
+            try modelContext.save()
+        } catch {
+        }
+    }
+
+    private func recomputeSearchMatches() {
+        guard !searchText.isEmpty else {
+            searchMatches = []
+            return
+        }
+        let content = book.content
+        var matches: [Range<String.Index>] = []
+        var searchStart = content.startIndex
+        while let range = content.range(of: searchText, options: .caseInsensitive, range: searchStart..<content.endIndex) {
+            matches.append(range)
+            searchStart = range.upperBound
+        }
+        searchMatches = matches
+        currentMatchIndex = 0
+    }
+
+    private func addBookmark() {
+        let label = newBookmarkLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalLabel = label.isEmpty ? "Закладка \(book.bookmarks.count + 1)" : label
+        let progress = book.format == .pdf ? pdfProgress : book.lastProgress
+        let bookmark = Bookmark(label: finalLabel, progress: progress, book: book)
+        modelContext.insert(bookmark)
+        book.bookmarks.append(bookmark)
+        do {
+            try modelContext.save()
+        } catch {
+        }
+        isAddingBookmark = false
+        newBookmarkLabel = ""
+    }
+}
+
+struct PDFKitView: NSViewRepresentable {
+    let document: PDFDocument
+    @Binding var currentPageIndex: Int
+    @Binding var progress: Double
+
+    func makeNSView(context: Context) -> PDFView {
+        let pdfView = PDFView()
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        pdfView.document = document
+
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.pageChanged),
+            name: Notification.Name.PDFViewPageChanged,
+            object: pdfView
+        )
+
+        if progress > 0, document.pageCount > 0 {
+            let pageIndex = min(Int(progress * Double(document.pageCount)), document.pageCount - 1)
+            if let page = document.page(at: pageIndex) {
+                pdfView.go(to: page)
+            }
+        }
+
+        return pdfView
+    }
+
+    func updateNSView(_ pdfView: PDFView, context: Context) {
+        if pdfView.document !== document {
+            pdfView.document = document
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    final class Coordinator: NSObject {
+        var parent: PDFKitView
+
+        init(_ parent: PDFKitView) {
+            self.parent = parent
+        }
+
+        @objc func pageChanged(_ notification: Notification) {
+            guard let pdfView = notification.object as? PDFView,
+                  let document = pdfView.document,
+                  document.pageCount > 0,
+                  let currentPage = pdfView.currentPage else { return }
+
+            let pageIndex = document.index(for: currentPage)
+            parent.currentPageIndex = pageIndex
+            parent.progress = Double(pageIndex) / Double(document.pageCount)
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+    }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Book.self, ReadingSession.self, Bookmark.self], inMemory: true)
+        .modelContainer(for: [Book.self, Bookmark.self, ReadingSession.self], inMemory: true)
 }
