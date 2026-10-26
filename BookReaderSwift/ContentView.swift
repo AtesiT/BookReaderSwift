@@ -1716,10 +1716,20 @@ struct ContentView: View {
     
     private func deleteBookmark(_ bookmark: Bookmark) {
         modelContext.delete(bookmark)
+        do {
+            try modelContext.save()
+        } catch {
+            errorMessage = "Не удалось удалить закладку: \(error.localizedDescription)"
+        }
     }
     
     private func deleteBook(_ book: Book) {
         modelContext.delete(book)
+        do {
+            try modelContext.save()
+        } catch {
+            errorMessage = "Не удалось удалить книгу: \(error.localizedDescription)"
+        }
     }
     
     private func renameBook(_ book: Book, to newTitle: String) {
