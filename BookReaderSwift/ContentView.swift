@@ -1258,15 +1258,6 @@ struct ReaderView: View {
         .background(.thinMaterial)
     }
 
-    private func prepareParagraphs() {
-        let content = book.content
-        totalContentLength = content.count
-        paragraphs = content
-            .components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
     private func recomputeSearchMatches() {
         guard !searchText.isEmpty else {
             searchMatches = []
@@ -1451,6 +1442,7 @@ struct ContentView: View {
                             self.pendingScrollTarget = nil
                         }
                     }
+                    .id(currentBook.persistentModelID)
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .scale(scale: 0.98)),
                         removal: .opacity
