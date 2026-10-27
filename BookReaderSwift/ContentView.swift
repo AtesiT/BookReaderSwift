@@ -393,20 +393,22 @@ struct EPUBParser {
     }
 
     private static func extractSpine(from xml: String) -> [String] {
-        var spine: [String] = []
-        let scanner = Scanner(string: xml)
-        guard scanner.scanUpToString("<spine") != nil, scanner.scanUpToString(">") != nil else {
-            return spine
+        guard let spineStartRange = xml.range(of: "<spine"),
+              let spineOpenEnd = xml.range(of: ">", range: spineStartRange.upperBound..<xml.endIndex),
+              let spineCloseRange = xml.range(of: "</spine>", range: spineOpenEnd.upperBound..<xml.endIndex) else {
+            return []
         }
+
+        let spineXML = String(xml[spineOpenEnd.upperBound..<spineCloseRange.lowerBound])
+
+        var spine: [String] = []
+        let scanner = Scanner(string: spineXML)
         while scanner.scanUpToString("<itemref ") != nil {
             guard scanner.scanString("<itemref ") != nil else { break }
             guard let tagEnd = scanner.scanUpToString("/>") ?? scanner.scanUpToString(">") else { continue }
             let attrs = parseAttributes(from: tagEnd)
             if let idref = attrs["idref"] {
                 spine.append(idref)
-            }
-            if scanner.scanUpToString("</spine>") != nil {
-                break
             }
         }
         return spine
