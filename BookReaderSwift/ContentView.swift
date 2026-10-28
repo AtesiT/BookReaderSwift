@@ -521,6 +521,9 @@ struct ContentView: View {
                 ProcessingOverlay()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
+            isImporterPresented = true
+        }
     }
 
     @ViewBuilder
@@ -1082,10 +1085,11 @@ struct ReaderView: View {
     @Bindable var book: Book
     var onClose: () -> Void
 
+    @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
+    @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
+
     @State private var paragraphs: [String] = []
     @State private var totalContentLength: Int = 0
-    @State private var theme: ReadingTheme = .light
-    @State private var font: ReadingFont = .system
     @State private var fontSize: CGFloat = 17
     @State private var searchText: String = ""
     @State private var searchMatches: [Range<String.Index>] = []
@@ -1097,17 +1101,40 @@ struct ReaderView: View {
     @State private var pdfProgress: Double = 0
     @State private var pdfPageIndex: Int = 0
     @State private var isLoadingContent = true
+    @State private var progressSaveTask: Task<Void, Never>?
 
     private struct ReaderTaskID: Equatable {
         let bookID: PersistentIdentifier
+    }
+
+    private var currentTheme: ReadingTheme {
+        ReadingTheme(rawValue: themeRawValue) ?? .light
+    }
+
+    private var currentFont: ReadingFont {
+        ReadingFont(rawValue: fontRawValue) ?? .serif
+    }
+
+    private var themeBinding: Binding<ReadingTheme> {
+        Binding(
+            get: { currentTheme },
+            set: { themeRawValue = $0.rawValue }
+        )
+    }
+
+    private var fontBinding: Binding<ReadingFont> {
+        Binding(
+            get: { currentFont },
+            set: { fontRawValue = $0.rawValue }
+        )
     }
 
     var body: some View {
         VStack(spacing: 0) {
             ReaderToolbarContent(
                 book: book,
-                theme: $theme,
-                font: $font,
+                theme: themeBinding,
+                font: fontBinding,
                 fontSize: $fontSize,
                 isSearchActive: $isSearchActive,
                 searchText: $searchText,
@@ -1121,7 +1148,7 @@ struct ReaderView: View {
 
             content
         }
-        .background(theme.backgroundColor)
+        .background(currentTheme.backgroundColor)
         .task(id: ReaderTaskID(bookID: book.persistentModelID)) {
             await loadContent()
         }
@@ -1137,8 +1164,21 @@ struct ReaderView: View {
             guard book.format == .pdf else { return }
             book.lastPageIndex = newValue
         }
+        .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
+            isSearchActive = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
+            fontSize = min(fontSize + 1, 28)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .decreaseFontSizeRequested)) { _ in
+            fontSize = max(fontSize - 1, 12)
+        }
         .sheet(isPresented: $isAddingBookmark) {
             addBookmarkSheet
+        }
+        .onDisappear {
+            progressSaveTask?.cancel()
+            saveProgress()
         }
     }
 
@@ -1168,8 +1208,8 @@ struct ReaderView: View {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
                         Text(paragraph)
-                            .font(font.font(size: fontSize))
-                            .foregroundStyle(theme.textColor)
+                            .font(currentFont.font(size: fontSize))
+                            .foregroundStyle(currentTheme.textColor)
                             .textSelection(.enabled)
                             .id(index)
                             .padding(.horizontal)
@@ -1248,6 +1288,18 @@ struct ReaderView: View {
         let scrolled = max(0, -minY)
         let progress = min(max(Double(scrolled / contentHeight), 0), 1)
         book.lastProgress = progress
+        scheduleProgressSave()
+    }
+
+    private func scheduleProgressSave() {
+        progressSaveTask?.cancel()
+        progressSaveTask = Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                saveProgress()
+            }
+        }
     }
 
     private func restoreTextPosition(proxy: ScrollViewProxy) {
