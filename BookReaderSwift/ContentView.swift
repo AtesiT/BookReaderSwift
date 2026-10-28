@@ -121,8 +121,8 @@ final class Book {
     var author: String?
     var formatRaw: String
     var content: String
-    var pdfData: Data?
-    var epubData: Data?
+    @Attribute(.externalStorage) var pdfData: Data?
+    @Attribute(.externalStorage) var epubData: Data?
     var importedAt: Date
     var lastProgress: Double
     var lastPageIndex: Int
@@ -374,8 +374,9 @@ struct EPUBParser {
         guard let startRange = xml.range(of: "<\(tag)") else { return nil }
         guard let contentStart = xml.range(of: ">", range: startRange.upperBound..<xml.endIndex) else { return nil }
         guard let endRange = xml.range(of: "</\(tag)>", range: contentStart.upperBound..<xml.endIndex) else { return nil }
-        return String(xml[contentStart.upperBound..<endRange.lowerBound])
+        let rawValue = String(xml[contentStart.upperBound..<endRange.lowerBound])
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        return decodeEntities(rawValue)
     }
 
     private static func extractManifest(from xml: String) -> [String: String] {
@@ -429,17 +430,23 @@ struct EPUBParser {
         return result
     }
 
+    private static func decodeEntities(_ text: String) -> String {
+        var result = text
+        result = result.replacingOccurrences(of: "&nbsp;", with: " ")
+        result = result.replacingOccurrences(of: "&amp;", with: "&")
+        result = result.replacingOccurrences(of: "&lt;", with: "<")
+        result = result.replacingOccurrences(of: "&gt;", with: ">")
+        result = result.replacingOccurrences(of: "&quot;", with: "\"")
+        result = result.replacingOccurrences(of: "&#39;", with: "'")
+        return result
+    }
+
     private static func stripHTML(_ html: String) -> String {
         var text = html
         text = text.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: .regularExpression)
         text = text.replacingOccurrences(of: "</p>", with: "\n\n", options: .caseInsensitive)
         text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
-        text = text.replacingOccurrences(of: "&amp;", with: "&")
-        text = text.replacingOccurrences(of: "&lt;", with: "<")
-        text = text.replacingOccurrences(of: "&gt;", with: ">")
-        text = text.replacingOccurrences(of: "&quot;", with: "\"")
-        text = text.replacingOccurrences(of: "&#39;", with: "'")
+        text = decodeEntities(text)
         return text
     }
 }
@@ -473,7 +480,18 @@ struct ContentView: View {
         case .title:
             return books.sorted { $0.title.localizedCompare($1.title) == .orderedAscending }
         case .author:
-            return books.sorted { ($0.author ?? "").localizedCompare($1.author ?? "") == .orderedAscending }
+            return books.sorted { lhs, rhs in
+                switch (lhs.author, rhs.author) {
+                case (nil, nil):
+                    return false
+                case (nil, _):
+                    return false
+                case (_, nil):
+                    return true
+                case let (l?, r?):
+                    return l.localizedCompare(r) == .orderedAscending
+                }
+            }
         case .recentlyAdded:
             return books.sorted { $0.importedAt > $1.importedAt }
         case .recentlyOpened:
@@ -523,6 +541,11 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
             isImporterPresented = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .dataStoreResetOccurred)) { notification in
+            if let message = notification.userInfo?["message"] as? String {
+                errorMessage = message
+            }
         }
     }
 
@@ -632,33 +655,47 @@ struct ContentView: View {
 
     private func importPDF(at url: URL) {
         isProcessingImport = true
-        do {
-            let data = try Data(contentsOf: url)
-            let title = url.deletingPathExtension().lastPathComponent
-            let book = Book(title: title, format: .pdf, pdfData: data)
-            modelContext.insert(book)
-            saveContext()
-            currentBook = book
-        } catch {
-            errorMessage = "Не удалось импортировать PDF: \(error.localizedDescription)"
+        Task.detached(priority: .userInitiated) {
+            do {
+                let data = try Data(contentsOf: url)
+                let title = url.deletingPathExtension().lastPathComponent
+                await MainActor.run {
+                    let book = Book(title: title, format: .pdf, pdfData: data)
+                    modelContext.insert(book)
+                    saveContext()
+                    currentBook = book
+                    isProcessingImport = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Не удалось импортировать PDF: \(error.localizedDescription)"
+                    isProcessingImport = false
+                }
+            }
         }
-        isProcessingImport = false
     }
 
     private func importPlainText(at url: URL, isMarkdown: Bool) {
         isProcessingImport = true
-        do {
-            let data = try Data(contentsOf: url)
-            let text = TextDecoding.decodeTextFile(data)
-            let title = url.deletingPathExtension().lastPathComponent
-            let book = Book(title: title, format: isMarkdown ? .md : .txt, content: text)
-            modelContext.insert(book)
-            saveContext()
-            currentBook = book
-        } catch {
-            errorMessage = "Не удалось импортировать файл: \(error.localizedDescription)"
+        Task.detached(priority: .userInitiated) {
+            do {
+                let data = try Data(contentsOf: url)
+                let text = TextDecoding.decodeTextFile(data)
+                let title = url.deletingPathExtension().lastPathComponent
+                await MainActor.run {
+                    let book = Book(title: title, format: isMarkdown ? .md : .txt, content: text)
+                    modelContext.insert(book)
+                    saveContext()
+                    currentBook = book
+                    isProcessingImport = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Не удалось импортировать файл: \(error.localizedDescription)"
+                    isProcessingImport = false
+                }
+            }
         }
-        isProcessingImport = false
     }
 
     private func importEPUB(at url: URL) {
@@ -1010,6 +1047,10 @@ struct ReaderToolbarContent: View {
     var onClose: () -> Void
     var onAddBookmark: () -> Void
 
+    private var isSearchAvailable: Bool {
+        book.format != .pdf
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             ToolbarIconButton(systemImage: "chevron.left", action: onClose)
@@ -1020,7 +1061,7 @@ struct ReaderToolbarContent: View {
 
             Spacer()
 
-            if isSearchActive {
+            if isSearchActive && isSearchAvailable {
                 HStack {
                     TextField("Поиск по тексту", text: $searchText)
                         .textFieldStyle(.roundedBorder)
@@ -1050,9 +1091,11 @@ struct ReaderToolbarContent: View {
                 }
             }
 
-            ToolbarIconButton(systemImage: isSearchActive ? "xmark.circle" : "magnifyingglass") {
-                isSearchActive.toggle()
-                if !isSearchActive { searchText = "" }
+            if isSearchAvailable {
+                ToolbarIconButton(systemImage: isSearchActive ? "xmark.circle" : "magnifyingglass") {
+                    isSearchActive.toggle()
+                    if !isSearchActive { searchText = "" }
+                }
             }
 
             ToolbarIconButton(systemImage: "bookmark") {
@@ -1092,7 +1135,7 @@ struct ReaderView: View {
     @State private var totalContentLength: Int = 0
     @State private var fontSize: CGFloat = 17
     @State private var searchText: String = ""
-    @State private var searchMatches: [Range<String.Index>] = []
+    @State private var searchMatches: [SearchMatch] = []
     @State private var currentMatchIndex: Int = 0
     @State private var isSearchActive = false
     @State private var isAddingBookmark = false
@@ -1102,9 +1145,15 @@ struct ReaderView: View {
     @State private var pdfPageIndex: Int = 0
     @State private var isLoadingContent = true
     @State private var progressSaveTask: Task<Void, Never>?
+    @State private var scrollProxy: ScrollViewProxy?
 
     private struct ReaderTaskID: Equatable {
         let bookID: PersistentIdentifier
+    }
+
+    private struct SearchMatch {
+        let paragraphIndex: Int
+        let range: Range<String.Index>
     }
 
     private var currentTheme: ReadingTheme {
@@ -1155,6 +1204,13 @@ struct ReaderView: View {
         .onChange(of: searchText) { _, _ in
             recomputeSearchMatches()
         }
+        .onChange(of: currentMatchIndex) { _, newValue in
+            guard searchMatches.indices.contains(newValue) else { return }
+            let paragraphIndex = searchMatches[newValue].paragraphIndex
+            withAnimation {
+                scrollProxy?.scrollTo(paragraphIndex, anchor: .center)
+            }
+        }
         .onChange(of: pdfProgress) { _, newValue in
             guard book.format == .pdf else { return }
             book.lastProgress = newValue
@@ -1165,6 +1221,7 @@ struct ReaderView: View {
             book.lastPageIndex = newValue
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
+            guard book.format != .pdf else { return }
             isSearchActive = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
@@ -1207,7 +1264,7 @@ struct ReaderView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
-                        Text(paragraph)
+                        Text(highlightedText(for: paragraph, paragraphIndex: index))
                             .font(currentFont.font(size: fontSize))
                             .foregroundStyle(currentTheme.textColor)
                             .textSelection(.enabled)
@@ -1227,6 +1284,7 @@ struct ReaderView: View {
             }
             .coordinateSpace(name: "scroll")
             .onAppear {
+                scrollProxy = proxy
                 restoreTextPosition(proxy: proxy)
             }
         }
@@ -1314,23 +1372,47 @@ struct ReaderView: View {
         do {
             try modelContext.save()
         } catch {
+            print("Не удалось сохранить прогресс чтения: \(error.localizedDescription)")
         }
     }
 
     private func recomputeSearchMatches() {
-        guard !searchText.isEmpty else {
+        guard !searchText.isEmpty, book.format != .pdf else {
             searchMatches = []
+            currentMatchIndex = 0
             return
         }
-        let content = book.content
-        var matches: [Range<String.Index>] = []
-        var searchStart = content.startIndex
-        while let range = content.range(of: searchText, options: .caseInsensitive, range: searchStart..<content.endIndex) {
-            matches.append(range)
-            searchStart = range.upperBound
+        var matches: [SearchMatch] = []
+        for (index, paragraph) in paragraphs.enumerated() {
+            var searchStart = paragraph.startIndex
+            while let range = paragraph.range(of: searchText, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
+                matches.append(SearchMatch(paragraphIndex: index, range: range))
+                searchStart = range.upperBound
+            }
         }
         searchMatches = matches
         currentMatchIndex = 0
+    }
+
+    private func highlightedText(for paragraph: String, paragraphIndex: Int) -> AttributedString {
+        guard isSearchActive, !searchText.isEmpty else {
+            return AttributedString(paragraph)
+        }
+
+        var attributed = AttributedString(paragraph)
+        var searchStart = paragraph.startIndex
+
+        while let range = paragraph.range(of: searchText, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
+            if let attrRange = Range(range, in: attributed) {
+                let isCurrent = searchMatches.indices.contains(currentMatchIndex)
+                    && searchMatches[currentMatchIndex].paragraphIndex == paragraphIndex
+                    && searchMatches[currentMatchIndex].range == range
+                attributed[attrRange].backgroundColor = isCurrent ? .orange : .yellow.opacity(0.5)
+            }
+            searchStart = range.upperBound
+        }
+
+        return attributed
     }
 
     private func addBookmark() {
@@ -1343,6 +1425,7 @@ struct ReaderView: View {
         do {
             try modelContext.save()
         } catch {
+            print("Не удалось сохранить закладку: \(error.localizedDescription)")
         }
         isAddingBookmark = false
         newBookmarkLabel = ""
