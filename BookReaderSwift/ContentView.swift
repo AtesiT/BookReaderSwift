@@ -1044,8 +1044,11 @@ struct ReaderToolbarContent: View {
     @Binding var searchText: String
     let matchCount: Int
     @Binding var currentMatchIndex: Int
+    let searchFocusTrigger: Int
     var onClose: () -> Void
     var onAddBookmark: () -> Void
+
+    @FocusState private var isSearchFieldFocused: Bool
 
     private var isSearchAvailable: Bool {
         book.format != .pdf
@@ -1066,6 +1069,7 @@ struct ReaderToolbarContent: View {
                     TextField("Поиск по тексту", text: $searchText)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 200)
+                        .focused($isSearchFieldFocused)
 
                     if matchCount > 0 {
                         Text("\(currentMatchIndex + 1)/\(matchCount)")
@@ -1120,6 +1124,16 @@ struct ReaderToolbarContent: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .onChange(of: isSearchActive) { _, newValue in
+            if !newValue {
+                isSearchFieldFocused = false
+            }
+        }
+        .onChange(of: searchFocusTrigger) { _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isSearchFieldFocused = true
+            }
+        }
     }
 }
 
@@ -1138,6 +1152,7 @@ struct ReaderView: View {
     @State private var searchMatches: [SearchMatch] = []
     @State private var currentMatchIndex: Int = 0
     @State private var isSearchActive = false
+    @State private var searchFocusTrigger: Int = 0
     @State private var isAddingBookmark = false
     @State private var newBookmarkLabel = ""
     @State private var pdfDocument: PDFDocument?
@@ -1189,6 +1204,7 @@ struct ReaderView: View {
                 searchText: $searchText,
                 matchCount: searchMatches.count,
                 currentMatchIndex: $currentMatchIndex,
+                searchFocusTrigger: searchFocusTrigger,
                 onClose: onClose,
                 onAddBookmark: { isAddingBookmark = true }
             )
@@ -1204,25 +1220,23 @@ struct ReaderView: View {
         .onChange(of: searchText) { _, _ in
             recomputeSearchMatches()
         }
-        .onChange(of: currentMatchIndex) { _, newValue in
-            guard searchMatches.indices.contains(newValue) else { return }
-            let paragraphIndex = searchMatches[newValue].paragraphIndex
-            withAnimation {
-                scrollProxy?.scrollTo(paragraphIndex, anchor: .center)
-            }
+        .onChange(of: currentMatchIndex) { _, _ in
+            scrollToCurrentMatch()
         }
         .onChange(of: pdfProgress) { _, newValue in
             guard book.format == .pdf else { return }
             book.lastProgress = newValue
-            saveProgress()
+            scheduleProgressSave()
         }
         .onChange(of: pdfPageIndex) { _, newValue in
             guard book.format == .pdf else { return }
             book.lastPageIndex = newValue
+            scheduleProgressSave()
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
             guard book.format != .pdf else { return }
             isSearchActive = true
+            searchFocusTrigger += 1
         }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
             fontSize = min(fontSize + 1, 28)
@@ -1392,6 +1406,15 @@ struct ReaderView: View {
         }
         searchMatches = matches
         currentMatchIndex = 0
+        scrollToCurrentMatch()
+    }
+
+    private func scrollToCurrentMatch() {
+        guard searchMatches.indices.contains(currentMatchIndex) else { return }
+        let paragraphIndex = searchMatches[currentMatchIndex].paragraphIndex
+        withAnimation {
+            scrollProxy?.scrollTo(paragraphIndex, anchor: .center)
+        }
     }
 
     private func highlightedText(for paragraph: String, paragraphIndex: Int) -> AttributedString {
@@ -1421,7 +1444,6 @@ struct ReaderView: View {
         let progress = book.format == .pdf ? pdfProgress : book.lastProgress
         let bookmark = Bookmark(label: finalLabel, progress: progress, book: book)
         modelContext.insert(bookmark)
-        book.bookmarks.append(bookmark)
         do {
             try modelContext.save()
         } catch {
