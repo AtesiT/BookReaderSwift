@@ -636,11 +636,6 @@ struct ContentView: View {
     }
 
     private func importFile(at url: URL) {
-        let needsSecurityScope = url.startAccessingSecurityScopedResource()
-        defer {
-            if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
-        }
-
         let ext = url.pathExtension.lowercased()
 
         switch ext {
@@ -656,6 +651,10 @@ struct ContentView: View {
     private func importPDF(at url: URL) {
         isProcessingImport = true
         Task.detached(priority: .userInitiated) {
+            let needsSecurityScope = url.startAccessingSecurityScopedResource()
+            defer {
+                if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
+            }
             do {
                 let data = try Data(contentsOf: url)
                 let title = url.deletingPathExtension().lastPathComponent
@@ -678,6 +677,10 @@ struct ContentView: View {
     private func importPlainText(at url: URL, isMarkdown: Bool) {
         isProcessingImport = true
         Task.detached(priority: .userInitiated) {
+            let needsSecurityScope = url.startAccessingSecurityScopedResource()
+            defer {
+                if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
+            }
             do {
                 let data = try Data(contentsOf: url)
                 let text = TextDecoding.decodeTextFile(data)
@@ -701,6 +704,10 @@ struct ContentView: View {
     private func importEPUB(at url: URL) {
         isProcessingImport = true
         Task.detached(priority: .userInitiated) {
+            let needsSecurityScope = url.startAccessingSecurityScopedResource()
+            defer {
+                if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
+            }
             do {
                 let data = try Data(contentsOf: url)
                 guard let parsed = EPUBParser.parse(data: data) else {
