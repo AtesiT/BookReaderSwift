@@ -636,6 +636,7 @@ struct ContentView: View {
     }
 
     private func importFile(at url: URL) {
+        errorMessage = nil
         let ext = url.pathExtension.lowercased()
 
         switch ext {
@@ -647,7 +648,7 @@ struct ContentView: View {
             importPlainText(at: url, isMarkdown: ext == "md")
         }
     }
-
+    
     private func importPDF(at url: URL) {
         isProcessingImport = true
         Task.detached(priority: .userInitiated) {
