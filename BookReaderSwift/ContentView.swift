@@ -1605,7 +1605,12 @@ struct PDFKitView: NSViewRepresentable {
                 fractionWithinPage = min(max(Double(distanceFromTop / pageHeight), 0), 1)
             }
 
-            let newProgress = min(max((Double(pageIndex) + fractionWithinPage) / Double(document.pageCount), 0), 1)
+            var newProgress = min(max((Double(pageIndex) + fractionWithinPage) / Double(document.pageCount), 0), 1)
+
+            let isLastPage = pageIndex == document.pageCount - 1
+            if isLastPage, pageHeight > 0, visibleRect.minY <= pageBounds.minY + 1 {
+                newProgress = 1
+            }
 
             if abs(newProgress - lastReportedProgress) > 0.001 {
                 lastReportedProgress = newProgress
