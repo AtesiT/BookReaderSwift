@@ -14,6 +14,7 @@ extension Notification.Name {
     static let previousMatchRequested = Notification.Name("previousMatchRequested")
     static let increaseFontSizeRequested = Notification.Name("increaseFontSizeRequested")
     static let decreaseFontSizeRequested = Notification.Name("decreaseFontSizeRequested")
+    static let jumpToProgressRequested = Notification.Name("jumpToProgressRequested")
 }
 
 enum BookFormat: String, Codable, CaseIterable {
@@ -636,7 +637,6 @@ struct ContentView: View {
     }
 
     private func importFile(at url: URL) {
-        errorMessage = nil
         let ext = url.pathExtension.lowercased()
 
         switch ext {
@@ -648,7 +648,7 @@ struct ContentView: View {
             importPlainText(at: url, isMarkdown: ext == "md")
         }
     }
-    
+
     private func importPDF(at url: URL) {
         isProcessingImport = true
         Task.detached(priority: .userInitiated) {
@@ -736,7 +736,15 @@ struct ContentView: View {
     }
 
     private func openBookmark(_ bookmark: Bookmark, in book: Book) {
-        currentBook = book
+        if currentBook?.persistentModelID == book.persistentModelID {
+            NotificationCenter.default.post(
+                name: .jumpToProgressRequested,
+                object: nil,
+                userInfo: ["progress": bookmark.progress]
+            )
+        } else {
+            currentBook = book
+        }
         book.lastProgress = bookmark.progress
         saveContext()
     }
@@ -1169,6 +1177,7 @@ struct ReaderView: View {
     @State private var isLoadingContent = true
     @State private var progressSaveTask: Task<Void, Never>?
     @State private var scrollProxy: ScrollViewProxy?
+    @State private var viewportHeight: CGFloat = 0
 
     private struct ReaderTaskID: Equatable {
         let bookID: PersistentIdentifier
@@ -1252,6 +1261,15 @@ struct ReaderView: View {
         .onReceive(NotificationCenter.default.publisher(for: .decreaseFontSizeRequested)) { _ in
             fontSize = max(fontSize - 1, 12)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .jumpToProgressRequested)) { notification in
+            guard book.format != .pdf,
+                  let progress = notification.userInfo?["progress"] as? Double,
+                  !paragraphs.isEmpty else { return }
+            let index = min(Int(Double(paragraphs.count) * progress), paragraphs.count - 1)
+            withAnimation {
+                scrollProxy?.scrollTo(index, anchor: .top)
+            }
+        }
         .sheet(isPresented: $isAddingBookmark) {
             addBookmarkSheet
         }
@@ -1305,6 +1323,15 @@ struct ReaderView: View {
                 )
             }
             .coordinateSpace(name: "scroll")
+            .background(
+                GeometryReader { outerGeo in
+                    Color.clear
+                        .onAppear { viewportHeight = outerGeo.size.height }
+                        .onChange(of: outerGeo.size.height) { _, newValue in
+                            viewportHeight = newValue
+                        }
+                }
+            )
             .onAppear {
                 scrollProxy = proxy
                 restoreTextPosition(proxy: proxy)
@@ -1364,9 +1391,14 @@ struct ReaderView: View {
     }
 
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
-        guard contentHeight > 0 else { return }
+        let scrollableHeight = contentHeight - viewportHeight
+        guard scrollableHeight > 0 else {
+            book.lastProgress = 1
+            scheduleProgressSave()
+            return
+        }
         let scrolled = max(0, -minY)
-        let progress = min(max(Double(scrolled / contentHeight), 0), 1)
+        let progress = min(max(Double(scrolled / scrollableHeight), 0), 1)
         book.lastProgress = progress
         scheduleProgressSave()
     }
@@ -1530,6 +1562,13 @@ struct PDFKitView: NSViewRepresentable {
                     object: scrollView.contentView
                 )
             }
+
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleJumpRequest(_:)),
+                name: .jumpToProgressRequested,
+                object: nil
+            )
         }
 
         @objc func pageChanged() {
@@ -1538,6 +1577,13 @@ struct PDFKitView: NSViewRepresentable {
 
         @objc func scrollChanged() {
             updateProgress()
+        }
+
+        @objc func handleJumpRequest(_ notification: Notification) {
+            guard let pdfView = pdfView,
+                  let document = pdfView.document,
+                  let progress = notification.userInfo?["progress"] as? Double else { return }
+            restoreProgress(progress, in: pdfView, document: document)
         }
 
         private func updateProgress() {
