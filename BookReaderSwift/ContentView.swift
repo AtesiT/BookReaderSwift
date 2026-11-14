@@ -468,8 +468,12 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var books: [Book]
 
+    /// Сообщение, которое нужно показать при запуске (например, о сбросе хранилища).
+    var startupMessage: String? = nil
+
     @State private var currentBook: Book?
     @State private var errorMessage: String?
+    @State private var didShowStartupMessage = false
     @State private var isProcessingImport = false
     @State private var isImporterPresented = false
     @State private var sortOrder: LibrarySortOrder = .recentlyAdded
@@ -552,13 +556,11 @@ struct ContentView: View {
                 ProcessingOverlay()
             }
         }
+        .onAppear {
+            showStartupMessageIfNeeded()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
             isImporterPresented = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .dataStoreResetOccurred)) { notification in
-            if let message = notification.userInfo?["message"] as? String {
-                errorMessage = message
-            }
         }
     }
 
@@ -635,6 +637,14 @@ struct ContentView: View {
                 },
                 onDelete: deleteBook
             )
+        }
+    }
+
+    private func showStartupMessageIfNeeded() {
+        guard !didShowStartupMessage else { return }
+        didShowStartupMessage = true
+        if let startupMessage {
+            errorMessage = startupMessage
         }
     }
 

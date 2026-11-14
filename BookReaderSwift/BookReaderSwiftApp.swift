@@ -4,45 +4,46 @@ import os
 
 private let appLogger = Logger(subsystem: "com.bookreaderswift.app", category: "Storage")
 
-extension Notification.Name {
-    static let dataStoreResetOccurred = Notification.Name("dataStoreResetOccurred")
-}
-
 @main
 struct BookReaderSwiftApp: App {
 
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
     @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
 
-    private static var recoveryMessage: String?
+    private struct StoreLoadResult {
+        let container: ModelContainer
+        let recoveryMessage: String?
+    }
 
-    private let container: ModelContainer = {
+    private let storeLoadResult: StoreLoadResult = BookReaderSwiftApp.loadStore()
+
+    private static func loadStore() -> StoreLoadResult {
         let schema = Schema([Book.self, ReadingSession.self, Bookmark.self])
         let configuration = ModelConfiguration(schema: schema)
 
         do {
             let container = try ModelContainer(for: schema, configurations: [configuration])
             appLogger.info("Хранилище данных успешно загружено.")
-            return container
+            return StoreLoadResult(container: container, recoveryMessage: nil)
         } catch {
             appLogger.error("Не удалось создать ModelContainer: \(error.localizedDescription, privacy: .public)")
 
-            if let storeURL = configuration.url as URL?,
-               FileManager.default.fileExists(atPath: storeURL.path) {
+            let storeURL = configuration.url
+            if FileManager.default.fileExists(atPath: storeURL.path) {
                 backupCorruptedStore(at: storeURL)
             }
 
             do {
                 let container = try ModelContainer(for: schema, configurations: [configuration])
-                recoveryMessage = "Не удалось загрузить предыдущую библиотеку из-за повреждения или несовместимости данных. Была создана новая пустая библиотека. Копия старых данных сохранена на диске."
                 appLogger.warning("Хранилище пересоздано после сброса повреждённого стора.")
-                return container
+                let message = "Не удалось загрузить предыдущую библиотеку из-за повреждения или несовместимости данных. Была создана новая пустая библиотека. Копия старых данных сохранена на диске."
+                return StoreLoadResult(container: container, recoveryMessage: message)
             } catch {
                 appLogger.fault("Не удалось создать хранилище данных даже после сброса: \(error.localizedDescription, privacy: .public)")
                 fatalError("Не удалось создать хранилище данных даже после сброса: \(error)")
             }
         }
-    }()
+    }
 
     private static func backupCorruptedStore(at storeURL: URL) {
         let fileManager = FileManager.default
@@ -71,18 +72,8 @@ struct BookReaderSwiftApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(startupMessage: storeLoadResult.recoveryMessage)
                 .frame(minWidth: 900, minHeight: 600)
-                .onAppear {
-                    if let message = BookReaderSwiftApp.recoveryMessage {
-                        NotificationCenter.default.post(
-                            name: .dataStoreResetOccurred,
-                            object: nil,
-                            userInfo: ["message": message]
-                        )
-                        BookReaderSwiftApp.recoveryMessage = nil
-                    }
-                }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -129,6 +120,6 @@ struct BookReaderSwiftApp: App {
                 .keyboardShortcut("-", modifiers: .command)
             }
         }
-        .modelContainer(container)
+        .modelContainer(storeLoadResult.container)
     }
 }
