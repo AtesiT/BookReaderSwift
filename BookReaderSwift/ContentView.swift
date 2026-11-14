@@ -504,11 +504,23 @@ struct ContentView: View {
         }
     }
 
+    private var isErrorPresented: Binding<Bool> {
+        Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )
+    }
+
     var body: some View {
         NavigationSplitView {
             sidebar
         } detail: {
             detail
+                .alert("Ошибка", isPresented: isErrorPresented, presenting: errorMessage) { _ in
+                    Button("OK", role: .cancel) {}
+                } message: { message in
+                    Text(message)
+                }
         }
         .fileImporter(
             isPresented: $isImporterPresented,
@@ -610,7 +622,7 @@ struct ContentView: View {
                 markBookOpened(currentBook)
             }
         } else if books.isEmpty {
-            EmptyLibraryView(errorMessage: errorMessage) {
+            EmptyLibraryView {
                 isImporterPresented = true
             }
         } else {
@@ -991,7 +1003,6 @@ struct BookmarkRow: View {
 }
 
 struct EmptyLibraryView: View {
-    let errorMessage: String?
     var onImport: () -> Void
 
     var body: some View {
@@ -1006,14 +1017,6 @@ struct EmptyLibraryView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 4)
-            }
 
             Button("Импортировать книгу", action: onImport)
                 .buttonStyle(.borderedProminent)
