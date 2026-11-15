@@ -468,7 +468,6 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var books: [Book]
 
-    /// Сообщение, которое нужно показать при запуске (например, о сбросе хранилища).
     var startupMessage: String? = nil
 
     @State private var currentBook: Book?
@@ -1522,21 +1521,21 @@ struct PDFKitView: NSViewRepresentable {
         context.coordinator.attachObservers(to: pdfView)
 
         if progress > 0 {
-            context.coordinator.restoreProgress(progress, in: pdfView, document: document)
+            context.coordinator.scheduleRestore(progress)
         }
 
         return pdfView
     }
 
     func updateNSView(_ pdfView: PDFView, context: Context) {
+        context.coordinator.parent = self
+
         if pdfView.document !== document {
             pdfView.document = document
             context.coordinator.lastReportedProgress = -1
             context.coordinator.attachObservers(to: pdfView)
             if progress > 0 {
-                DispatchQueue.main.async {
-                    context.coordinator.restoreProgress(progress, in: pdfView, document: document)
-                }
+                context.coordinator.scheduleRestore(progress)
             }
         }
     }
@@ -1549,7 +1548,11 @@ struct PDFKitView: NSViewRepresentable {
         var parent: PDFKitView
         weak var pdfView: PDFView?
         var lastReportedProgress: Double = -1
+
+        private var pendingRestoreProgress: Double?
+        private var isRestoreScheduled = false
         private var isRestoring = false
+        private weak var observedClipView: NSClipView?
 
         init(_ parent: PDFKitView) {
             self.parent = parent
@@ -1558,6 +1561,7 @@ struct PDFKitView: NSViewRepresentable {
         func attachObservers(to pdfView: PDFView) {
             self.pdfView = pdfView
             NotificationCenter.default.removeObserver(self)
+            observedClipView = nil
 
             NotificationCenter.default.addObserver(
                 self,
@@ -1566,15 +1570,13 @@ struct PDFKitView: NSViewRepresentable {
                 object: pdfView
             )
 
-            if let scrollView = pdfView.documentView?.enclosingScrollView {
-                scrollView.contentView.postsBoundsChangedNotifications = true
-                NotificationCenter.default.addObserver(
-                    self,
-                    selector: #selector(scrollChanged),
-                    name: NSView.boundsDidChangeNotification,
-                    object: scrollView.contentView
-                )
-            }
+            pdfView.postsFrameChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(frameChanged),
+                name: NSView.frameDidChangeNotification,
+                object: pdfView
+            )
 
             NotificationCenter.default.addObserver(
                 self,
@@ -1582,6 +1584,60 @@ struct PDFKitView: NSViewRepresentable {
                 name: .jumpToProgressRequested,
                 object: nil
             )
+
+            attachScrollObserver(to: pdfView)
+        }
+        
+        private func attachScrollObserver(to pdfView: PDFView) {
+            guard let clipView = pdfView.documentView?.enclosingScrollView?.contentView,
+                  clipView !== observedClipView else { return }
+
+            if let old = observedClipView {
+                NotificationCenter.default.removeObserver(
+                    self,
+                    name: NSView.boundsDidChangeNotification,
+                    object: old
+                )
+            }
+
+            observedClipView = clipView
+            clipView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(scrollChanged),
+                name: NSView.boundsDidChangeNotification,
+                object: clipView
+            )
+        }
+
+        func scheduleRestore(_ progress: Double) {
+            pendingRestoreProgress = progress
+            attemptPendingRestore()
+        }
+
+        private func attemptPendingRestore() {
+            guard pendingRestoreProgress != nil, !isRestoreScheduled else { return }
+            guard let pdfView = pdfView,
+                  pdfView.bounds.width > 0,
+                  pdfView.bounds.height > 0 else { return }
+
+            isRestoreScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.isRestoreScheduled = false
+
+                guard let progress = self.pendingRestoreProgress,
+                      let pdfView = self.pdfView,
+                      let document = pdfView.document else { return }
+
+                self.pendingRestoreProgress = nil
+                self.attachScrollObserver(to: pdfView)
+                self.restoreProgress(progress, in: pdfView, document: document)
+            }
+        }
+
+        @objc func frameChanged() {
+            attemptPendingRestore()
         }
 
         @objc func pageChanged() {
@@ -1596,11 +1652,13 @@ struct PDFKitView: NSViewRepresentable {
             guard let pdfView = pdfView,
                   let document = pdfView.document,
                   let progress = notification.userInfo?["progress"] as? Double else { return }
+            pendingRestoreProgress = nil
             restoreProgress(progress, in: pdfView, document: document)
         }
 
         private func updateProgress() {
             guard !isRestoring,
+                  pendingRestoreProgress == nil,
                   let pdfView = pdfView,
                   let document = pdfView.document,
                   document.pageCount > 0,
@@ -1636,9 +1694,6 @@ struct PDFKitView: NSViewRepresentable {
         }
 
         func restoreProgress(_ progress: Double, in pdfView: PDFView, document: PDFDocument) {
-            isRestoring = true
-            defer { isRestoring = false }
-
             let pageCount = document.pageCount
             guard pageCount > 0 else { return }
 
@@ -1648,6 +1703,8 @@ struct PDFKitView: NSViewRepresentable {
 
             guard let page = document.page(at: pageIndex) else { return }
 
+            isRestoring = true
+
             let pageBounds = page.bounds(for: pdfView.displayBox)
             let y = pageBounds.maxY - CGFloat(fractionWithinPage) * pageBounds.height
             let point = CGPoint(x: pageBounds.minX, y: y)
@@ -1656,6 +1713,18 @@ struct PDFKitView: NSViewRepresentable {
             pdfView.go(to: destination)
 
             lastReportedProgress = progress
+            
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.isRestoring = false
+                let parent = self.parent
+                if parent.progress != progress {
+                    parent.progress = progress
+                }
+                if parent.currentPageIndex != pageIndex {
+                    parent.currentPageIndex = pageIndex
+                }
+            }
         }
 
         deinit {
