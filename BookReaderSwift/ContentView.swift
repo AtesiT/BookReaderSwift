@@ -324,10 +324,47 @@ struct EPUBParser {
         let content: String
     }
 
+    private static let namedEntities: [String: String] = [
+        "nbsp": " ",
+        "amp": "&",
+        "lt": "<",
+        "gt": ">",
+        "quot": "\"",
+        "apos": "'",
+        "shy": "",
+        "laquo": "«",
+        "raquo": "»",
+        "mdash": "—",
+        "ndash": "–",
+        "hellip": "…",
+        "lsquo": "‘",
+        "rsquo": "’",
+        "ldquo": "“",
+        "rdquo": "”",
+        "bdquo": "„",
+        "sbquo": "‚",
+        "copy": "©",
+        "reg": "®",
+        "trade": "™",
+        "deg": "°",
+        "sect": "§",
+        "para": "¶",
+        "middot": "·",
+        "bull": "•",
+        "thinsp": "\u{2009}",
+        "ensp": "\u{2002}",
+        "emsp": "\u{2003}"
+    ]
+
     static func parse(data: Data) -> ParsedBook? {
         guard let archive = ZipArchive(data: data) else { return nil }
 
-        guard let containerEntry = archive.entries.first(where: { $0.name == "META-INF/container.xml" }),
+        var entriesByName: [String: ZipArchive.Entry] = [:]
+        for entry in archive.entries where entriesByName[entry.name] == nil {
+            entriesByName[entry.name] = entry
+        }
+
+        guard let containerEntry = entriesByName["META-INF/container.xml"],
               let containerData = archive.contents(of: containerEntry),
               let containerXML = String(data: containerData, encoding: .utf8) else {
             return nil
@@ -335,13 +372,12 @@ struct EPUBParser {
 
         guard let opfPath = extractOPFPath(from: containerXML) else { return nil }
 
-        guard let opfEntry = archive.entries.first(where: { $0.name == opfPath }),
+        guard let opfEntry = findEntry(href: opfPath, basePath: "", in: entriesByName),
               let opfData = archive.contents(of: opfEntry),
               let opfXML = String(data: opfData, encoding: .utf8) else {
             return nil
         }
-
-        let basePath = (opfPath as NSString).deletingLastPathComponent
+        let basePath = (opfEntry.name as NSString).deletingLastPathComponent
 
         let title = extractTag("dc:title", from: opfXML)
         let author = extractTag("dc:creator", from: opfXML)
@@ -349,19 +385,65 @@ struct EPUBParser {
         let manifest = extractManifest(from: opfXML)
         let spine = extractSpine(from: opfXML)
 
-        var fullText = ""
+        var chapters: [String] = []
         for idref in spine {
-            guard let href = manifest[idref] else { continue }
-            let fullPath = basePath.isEmpty ? href : "\(basePath)/\(href)"
-            guard let entry = archive.entries.first(where: { $0.name == fullPath || $0.name == href }),
+            guard let href = manifest[idref],
+                  let entry = findEntry(href: href, basePath: basePath, in: entriesByName),
                   let itemData = archive.contents(of: entry),
                   let html = String(data: itemData, encoding: .utf8) else { continue }
 
-            fullText += stripHTML(html)
-            fullText += "\n\n"
+            let chapterText = stripHTML(html)
+            guard !chapterText.isEmpty else { continue }
+            chapters.append(chapterText)
         }
 
-        return ParsedBook(title: title, author: author, content: fullText.trimmingCharacters(in: .whitespacesAndNewlines))
+        let content = chapters.joined(separator: "\n\n")
+        guard !content.isEmpty else { return nil }
+
+        return ParsedBook(title: title, author: author, content: content)
+    }
+    private static func findEntry(
+        href: String,
+        basePath: String,
+        in entries: [String: ZipArchive.Entry]
+    ) -> ZipArchive.Entry? {
+        let withoutFragment = href
+            .split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            .first
+            .map(String.init) ?? href
+
+        var variants = [withoutFragment]
+        if let decoded = withoutFragment.removingPercentEncoding, decoded != withoutFragment {
+            variants.insert(decoded, at: 0)
+        }
+
+        for variant in variants {
+            if let entry = entries[normalizePath(basePath: basePath, href: variant)] {
+                return entry
+            }
+        }
+
+        for variant in variants {
+            if let entry = entries[normalizePath(basePath: "", href: variant)] {
+                return entry
+            }
+        }
+
+        return nil
+    }
+
+    private static func normalizePath(basePath: String, href: String) -> String {
+        let combined = basePath.isEmpty ? href : basePath + "/" + href
+        var parts: [Substring] = []
+        for part in combined.split(separator: "/", omittingEmptySubsequences: true) {
+            if part == "." { continue }
+            if part == ".." {
+                if !parts.isEmpty { parts.removeLast() }
+                continue
+            }
+            parts.append(part)
+        }
+        return parts.joined(separator: "/")
     }
 
     private static func extractOPFPath(from xml: String) -> String? {
@@ -388,7 +470,7 @@ struct EPUBParser {
             guard let tagEnd = scanner.scanUpToString("/>") ?? scanner.scanUpToString(">") else { continue }
             let attrs = parseAttributes(from: tagEnd)
             if let id = attrs["id"], let href = attrs["href"] {
-                manifest[id] = href
+                manifest[id] = decodeEntities(href)
             }
         }
         return manifest
@@ -430,25 +512,81 @@ struct EPUBParser {
         }
         return result
     }
-
     private static func decodeEntities(_ text: String) -> String {
-        var result = text
-        result = result.replacingOccurrences(of: "&nbsp;", with: " ")
-        result = result.replacingOccurrences(of: "&amp;", with: "&")
-        result = result.replacingOccurrences(of: "&lt;", with: "<")
-        result = result.replacingOccurrences(of: "&gt;", with: ">")
-        result = result.replacingOccurrences(of: "&quot;", with: "\"")
-        result = result.replacingOccurrences(of: "&#39;", with: "'")
+        guard text.contains("&"),
+              let regex = try? NSRegularExpression(
+                pattern: #"&(#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);"#
+              ) else {
+            return text
+        }
+
+        let nsText = text as NSString
+        var result = ""
+        var lastEnd = 0
+
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            result += nsText.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+
+            let body = nsText.substring(with: match.range(at: 1))
+            if let decoded = decodeEntityBody(body) {
+                result += decoded
+            } else {
+                result += nsText.substring(with: match.range)
+            }
+
+            lastEnd = match.range.location + match.range.length
+        }
+
+        result += nsText.substring(from: lastEnd)
         return result
+    }
+
+    private static func decodeEntityBody(_ body: String) -> String? {
+        if body.hasPrefix("#") {
+            let digits = body.dropFirst()
+            let value: UInt32?
+            if digits.hasPrefix("x") || digits.hasPrefix("X") {
+                value = UInt32(digits.dropFirst(), radix: 16)
+            } else {
+                value = UInt32(digits, radix: 10)
+            }
+            guard let value, value != 0, let scalar = Unicode.Scalar(value) else { return nil }
+            return String(Character(scalar))
+        }
+        return namedEntities[body]
     }
 
     private static func stripHTML(_ html: String) -> String {
         var text = html
-        text = text.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: .regularExpression)
-        text = text.replacingOccurrences(of: "</p>", with: "\n\n", options: .caseInsensitive)
+
+        let removalPatterns = [
+            #"(?s)<!--.*?-->"#,
+            #"(?is)<(?:script|style)\b[^>]*/>"#,
+            #"(?is)<head\b[^>]*>.*?</head\s*>"#,
+            #"(?is)<style\b[^>]*>.*?</style\s*>"#,
+            #"(?is)<script\b[^>]*>.*?</script\s*>"#
+        ]
+        for pattern in removalPatterns {
+            text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+
+        text = text.replacingOccurrences(of: #"(?i)<br\s*/?>"#, with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(
+            of: #"(?i)</(?:p|div|h[1-6]|li|blockquote|section|article|tr|pre)\s*>"#,
+            with: "\n\n",
+            options: .regularExpression
+        )
+
         text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
         text = decodeEntities(text)
-        return text
+
+        text = text.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"[ \t]*\n[ \t]*"#, with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -1587,7 +1725,6 @@ struct PDFKitView: NSViewRepresentable {
 
             attachScrollObserver(to: pdfView)
         }
-        
         private func attachScrollObserver(to pdfView: PDFView) {
             guard let clipView = pdfView.documentView?.enclosingScrollView?.contentView,
                   clipView !== observedClipView else { return }
@@ -1713,7 +1850,7 @@ struct PDFKitView: NSViewRepresentable {
             pdfView.go(to: destination)
 
             lastReportedProgress = progress
-            
+
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.isRestoring = false
