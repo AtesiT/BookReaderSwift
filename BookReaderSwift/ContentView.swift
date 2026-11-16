@@ -402,6 +402,7 @@ struct EPUBParser {
 
         return ParsedBook(title: title, author: author, content: content)
     }
+
     private static func findEntry(
         href: String,
         basePath: String,
@@ -512,6 +513,7 @@ struct EPUBParser {
         }
         return result
     }
+
     private static func decodeEntities(_ text: String) -> String {
         guard text.contains("&"),
               let regex = try? NSRegularExpression(
@@ -895,6 +897,8 @@ struct ContentView: View {
     }
 
     private func openBookmark(_ bookmark: Bookmark, in book: Book) {
+        book.lastProgress = bookmark.progress
+        saveContext()
         if currentBook?.persistentModelID == book.persistentModelID {
             NotificationCenter.default.post(
                 name: .jumpToProgressRequested,
@@ -904,8 +908,6 @@ struct ContentView: View {
         } else {
             currentBook = book
         }
-        book.lastProgress = bookmark.progress
-        saveContext()
     }
 
     private func deleteBookmark(_ bookmark: Bookmark) {
@@ -1403,6 +1405,14 @@ struct ReaderView: View {
             isSearchActive = true
             searchFocusTrigger += 1
         }
+        .onReceive(NotificationCenter.default.publisher(for: .nextMatchRequested)) { _ in
+            guard !searchMatches.isEmpty else { return }
+            currentMatchIndex = (currentMatchIndex + 1) % searchMatches.count
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .previousMatchRequested)) { _ in
+            guard !searchMatches.isEmpty else { return }
+            currentMatchIndex = (currentMatchIndex + searchMatches.count - 1) % searchMatches.count
+        }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
             fontSize = min(fontSize + 1, 28)
         }
@@ -1413,7 +1423,9 @@ struct ReaderView: View {
             guard book.format != .pdf,
                   let progress = notification.userInfo?["progress"] as? Double,
                   !paragraphs.isEmpty else { return }
-            let index = min(Int(Double(paragraphs.count) * progress), paragraphs.count - 1)
+            progressSaveTask?.cancel()
+            book.lastProgress = progress
+            let index = min(max(Int(Double(paragraphs.count) * progress), 0), paragraphs.count - 1)
             withAnimation {
                 scrollProxy?.scrollTo(index, anchor: .top)
             }
@@ -1511,6 +1523,8 @@ struct ReaderView: View {
 
     private func loadContent() async {
         isLoadingContent = true
+        searchMatches = []
+        currentMatchIndex = 0
         switch book.format {
         case .pdf:
             let data = book.pdfData
@@ -1534,6 +1548,9 @@ struct ReaderView: View {
                 self.paragraphs = computedParagraphs
                 self.totalContentLength = content.count
                 self.isLoadingContent = false
+                if !self.searchText.isEmpty {
+                    self.recomputeSearchMatches()
+                }
             }
         }
     }
@@ -1723,6 +1740,7 @@ struct PDFKitView: NSViewRepresentable {
 
             attachScrollObserver(to: pdfView)
         }
+
         private func attachScrollObserver(to pdfView: PDFView) {
             guard let clipView = pdfView.documentView?.enclosingScrollView?.contentView,
                   clipView !== observedClipView else { return }
