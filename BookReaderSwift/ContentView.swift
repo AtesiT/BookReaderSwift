@@ -991,10 +991,8 @@ struct BookCoverView: View {
     }
 
     private func generatedColor(from seed: String) -> Color {
-        var hasher = Hasher()
-        hasher.combine(seed)
-        let hashValue = hasher.finalize()
-        let hue = Double(abs(hashValue) % 360) / 360.0
+        let hash = seed.utf8.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1) }
+        let hue = Double(hash % 360) / 360.0
         return Color(hue: hue, saturation: 0.55, brightness: 0.65)
     }
 }
