@@ -1328,6 +1328,7 @@ struct ReaderView: View {
     @State private var progressSaveTask: Task<Void, Never>?
     @State private var scrollProxy: ScrollViewProxy?
     @State private var viewportHeight: CGFloat = 0
+    @State private var isRestoringPosition = false
 
     private struct ReaderTaskID: Equatable {
         let bookID: PersistentIdentifier
@@ -1424,10 +1425,14 @@ struct ReaderView: View {
                   let progress = notification.userInfo?["progress"] as? Double,
                   !paragraphs.isEmpty else { return }
             progressSaveTask?.cancel()
+            isRestoringPosition = true
             book.lastProgress = progress
-            let index = min(max(Int(Double(paragraphs.count) * progress), 0), paragraphs.count - 1)
+            let index = paragraphIndex(for: progress)
             withAnimation {
                 scrollProxy?.scrollTo(index, anchor: .top)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                isRestoringPosition = false
             }
         }
         .sheet(isPresented: $isAddingBookmark) {
@@ -1545,6 +1550,7 @@ struct ReaderView: View {
                     .filter { !$0.isEmpty }
             }.value
             await MainActor.run {
+                self.isRestoringPosition = book.lastProgress > 0
                 self.paragraphs = computedParagraphs
                 self.totalContentLength = content.count
                 self.isLoadingContent = false
@@ -1555,7 +1561,26 @@ struct ReaderView: View {
         }
     }
 
+    private func paragraphIndex(for progress: Double) -> Int {
+        guard !paragraphs.isEmpty else { return 0 }
+        let clamped = min(max(progress, 0), 1)
+        let totalChars = paragraphs.reduce(0) { $0 + max($1.count, 1) }
+        guard totalChars > 0 else {
+            return min(Int(Double(paragraphs.count) * clamped), paragraphs.count - 1)
+        }
+        let targetChars = Int(Double(totalChars) * clamped)
+        var accumulated = 0
+        for (index, paragraph) in paragraphs.enumerated() {
+            accumulated += max(paragraph.count, 1)
+            if accumulated >= targetChars {
+                return index
+            }
+        }
+        return paragraphs.count - 1
+    }
+
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
+        guard !isRestoringPosition, viewportHeight > 0 else { return }
         let scrollableHeight = contentHeight - viewportHeight
         guard scrollableHeight > 0 else {
             book.lastProgress = 1
@@ -1580,10 +1605,17 @@ struct ReaderView: View {
     }
 
     private func restoreTextPosition(proxy: ScrollViewProxy) {
-        guard book.lastProgress > 0, !paragraphs.isEmpty else { return }
-        let index = min(Int(Double(paragraphs.count) * book.lastProgress), paragraphs.count - 1)
+        guard book.lastProgress > 0, !paragraphs.isEmpty else {
+            isRestoringPosition = false
+            return
+        }
+        isRestoringPosition = true
+        let index = paragraphIndex(for: book.lastProgress)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             proxy.scrollTo(index, anchor: .top)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                isRestoringPosition = false
+            }
         }
     }
 
