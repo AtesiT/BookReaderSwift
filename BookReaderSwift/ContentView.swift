@@ -465,11 +465,8 @@ struct EPUBParser {
 
     private static func extractManifest(from xml: String) -> [String: String] {
         var manifest: [String: String] = [:]
-        let scanner = Scanner(string: xml)
-        while scanner.scanUpToString("<item ") != nil {
-            guard scanner.scanString("<item ") != nil else { break }
-            guard let tagEnd = scanner.scanUpToString("/>") ?? scanner.scanUpToString(">") else { continue }
-            let attrs = parseAttributes(from: tagEnd)
+        for tagContent in extractOpeningTags(named: "item", from: xml) {
+            let attrs = parseAttributes(from: tagContent)
             if let id = attrs["id"], let href = attrs["href"] {
                 manifest[id] = decodeEntities(href)
             }
@@ -487,16 +484,26 @@ struct EPUBParser {
         let spineXML = String(xml[spineOpenEnd.upperBound..<spineCloseRange.lowerBound])
 
         var spine: [String] = []
-        let scanner = Scanner(string: spineXML)
-        while scanner.scanUpToString("<itemref ") != nil {
-            guard scanner.scanString("<itemref ") != nil else { break }
-            guard let tagEnd = scanner.scanUpToString("/>") ?? scanner.scanUpToString(">") else { continue }
-            let attrs = parseAttributes(from: tagEnd)
+        for tagContent in extractOpeningTags(named: "itemref", from: spineXML) {
+            let attrs = parseAttributes(from: tagContent)
             if let idref = attrs["idref"] {
                 spine.append(idref)
             }
         }
         return spine
+    }
+
+    private static func extractOpeningTags(named tagName: String, from xml: String) -> [String] {
+        let pattern = "<\(NSRegularExpression.escapedPattern(for: tagName))\\b([^>]*)>"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return []
+        }
+        let nsString = xml as NSString
+        let matches = regex.matches(in: xml, range: NSRange(location: 0, length: nsString.length))
+        return matches.compactMap { match in
+            guard match.numberOfRanges >= 2 else { return nil }
+            return nsString.substring(with: match.range(at: 1))
+        }
     }
 
     private static func parseAttributes(from fragment: String) -> [String: String] {
@@ -1310,10 +1317,10 @@ struct ReaderView: View {
 
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
     @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
+    @AppStorage("readingFontSize") private var storedFontSize: Double = 17
 
     @State private var paragraphs: [String] = []
     @State private var totalContentLength: Int = 0
-    @State private var fontSize: CGFloat = 17
     @State private var searchText: String = ""
     @State private var searchMatches: [SearchMatch] = []
     @State private var currentMatchIndex: Int = 0
@@ -1325,10 +1332,10 @@ struct ReaderView: View {
     @State private var pdfProgress: Double = 0
     @State private var pdfPageIndex: Int = 0
     @State private var isLoadingContent = true
+    @State private var isRestoringTextPosition = false
     @State private var progressSaveTask: Task<Void, Never>?
     @State private var scrollProxy: ScrollViewProxy?
     @State private var viewportHeight: CGFloat = 0
-    @State private var isRestoringPosition = false
 
     private struct ReaderTaskID: Equatable {
         let bookID: PersistentIdentifier
@@ -1347,6 +1354,10 @@ struct ReaderView: View {
         ReadingFont(rawValue: fontRawValue) ?? .serif
     }
 
+    private var fontSize: CGFloat {
+        CGFloat(storedFontSize)
+    }
+
     private var themeBinding: Binding<ReadingTheme> {
         Binding(
             get: { currentTheme },
@@ -1361,13 +1372,20 @@ struct ReaderView: View {
         )
     }
 
+    private var fontSizeBinding: Binding<CGFloat> {
+        Binding(
+            get: { CGFloat(storedFontSize) },
+            set: { storedFontSize = Double($0) }
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ReaderToolbarContent(
                 book: book,
                 theme: themeBinding,
                 font: fontBinding,
-                fontSize: $fontSize,
+                fontSize: fontSizeBinding,
                 isSearchActive: $isSearchActive,
                 searchText: $searchText,
                 matchCount: searchMatches.count,
@@ -1415,24 +1433,24 @@ struct ReaderView: View {
             currentMatchIndex = (currentMatchIndex + searchMatches.count - 1) % searchMatches.count
         }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
-            fontSize = min(fontSize + 1, 28)
+            storedFontSize = min(storedFontSize + 1, 28)
         }
         .onReceive(NotificationCenter.default.publisher(for: .decreaseFontSizeRequested)) { _ in
-            fontSize = max(fontSize - 1, 12)
+            storedFontSize = max(storedFontSize - 1, 12)
         }
         .onReceive(NotificationCenter.default.publisher(for: .jumpToProgressRequested)) { notification in
             guard book.format != .pdf,
                   let progress = notification.userInfo?["progress"] as? Double,
                   !paragraphs.isEmpty else { return }
             progressSaveTask?.cancel()
-            isRestoringPosition = true
+            isRestoringTextPosition = true
             book.lastProgress = progress
-            let index = paragraphIndex(for: progress)
+            let index = min(max(Int(Double(paragraphs.count) * progress), 0), paragraphs.count - 1)
             withAnimation {
                 scrollProxy?.scrollTo(index, anchor: .top)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                isRestoringPosition = false
+                isRestoringTextPosition = false
             }
         }
         .sheet(isPresented: $isAddingBookmark) {
@@ -1550,9 +1568,9 @@ struct ReaderView: View {
                     .filter { !$0.isEmpty }
             }.value
             await MainActor.run {
-                self.isRestoringPosition = book.lastProgress > 0
                 self.paragraphs = computedParagraphs
                 self.totalContentLength = content.count
+                self.isRestoringTextPosition = book.lastProgress > 0 && !computedParagraphs.isEmpty
                 self.isLoadingContent = false
                 if !self.searchText.isEmpty {
                     self.recomputeSearchMatches()
@@ -1561,26 +1579,8 @@ struct ReaderView: View {
         }
     }
 
-    private func paragraphIndex(for progress: Double) -> Int {
-        guard !paragraphs.isEmpty else { return 0 }
-        let clamped = min(max(progress, 0), 1)
-        let totalChars = paragraphs.reduce(0) { $0 + max($1.count, 1) }
-        guard totalChars > 0 else {
-            return min(Int(Double(paragraphs.count) * clamped), paragraphs.count - 1)
-        }
-        let targetChars = Int(Double(totalChars) * clamped)
-        var accumulated = 0
-        for (index, paragraph) in paragraphs.enumerated() {
-            accumulated += max(paragraph.count, 1)
-            if accumulated >= targetChars {
-                return index
-            }
-        }
-        return paragraphs.count - 1
-    }
-
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
-        guard !isRestoringPosition, viewportHeight > 0 else { return }
+        guard !isRestoringTextPosition else { return }
         let scrollableHeight = contentHeight - viewportHeight
         guard scrollableHeight > 0 else {
             book.lastProgress = 1
@@ -1606,15 +1606,15 @@ struct ReaderView: View {
 
     private func restoreTextPosition(proxy: ScrollViewProxy) {
         guard book.lastProgress > 0, !paragraphs.isEmpty else {
-            isRestoringPosition = false
+            isRestoringTextPosition = false
             return
         }
-        isRestoringPosition = true
-        let index = paragraphIndex(for: book.lastProgress)
+        isRestoringTextPosition = true
+        let index = min(Int(Double(paragraphs.count) * book.lastProgress), paragraphs.count - 1)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             proxy.scrollTo(index, anchor: .top)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                isRestoringPosition = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                isRestoringTextPosition = false
             }
         }
     }
