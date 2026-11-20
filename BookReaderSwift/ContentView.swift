@@ -1157,7 +1157,7 @@ struct SidebarRow: View {
             Spacer()
 
             if book.lastProgress > 0 {
-                Text("\(Int(book.lastProgress * 100))%")
+                Text("\(Int((book.lastProgress * 100).rounded()))%")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1201,7 +1201,7 @@ struct BookmarkRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(bookmark.label)
                     .lineLimit(1)
-                Text("\(Int(bookmark.progress * 100))%")
+                Text("\(Int((bookmark.progress * 100).rounded()))%")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1515,6 +1515,11 @@ struct ReaderView: View {
         }
         .sheet(isPresented: $isAddingBookmark) {
             addBookmarkSheet
+        }
+        .onChange(of: isAddingBookmark) { _, newValue in
+            if !newValue {
+                newBookmarkLabel = ""
+            }
         }
         .onDisappear {
             progressSaveTask?.cancel()
