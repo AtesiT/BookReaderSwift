@@ -1496,12 +1496,15 @@ struct ReaderView: View {
             storedFontSize = max(storedFontSize - 1, 12)
         }
         .onReceive(NotificationCenter.default.publisher(for: .jumpToProgressRequested)) { notification in
-            guard book.format != .pdf,
-                  let progress = notification.userInfo?["progress"] as? Double,
-                  !paragraphs.isEmpty else { return }
+            guard let progress = notification.userInfo?["progress"] as? Double else { return }
             progressSaveTask?.cancel()
-            isRestoringTextPosition = true
             book.lastProgress = progress
+            if book.format == .pdf {
+                pdfProgress = progress
+                return
+            }
+            guard !paragraphs.isEmpty else { return }
+            isRestoringTextPosition = true
             let index = min(max(Int(Double(paragraphs.count) * progress), 0), paragraphs.count - 1)
             withAnimation {
                 scrollProxy?.scrollTo(index, anchor: .top)
