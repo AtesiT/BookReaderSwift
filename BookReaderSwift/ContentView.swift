@@ -1377,6 +1377,7 @@ struct ReaderView: View {
     @State private var totalContentLength: Int = 0
     @State private var searchText: String = ""
     @State private var searchMatches: [SearchMatch] = []
+    @State private var matchesByParagraph: [Int: [Int]] = [:]
     @State private var currentMatchIndex: Int = 0
     @State private var isSearchActive = false
     @State private var searchFocusTrigger: Int = 0
@@ -1388,6 +1389,7 @@ struct ReaderView: View {
     @State private var isLoadingContent = true
     @State private var isRestoringTextPosition = false
     @State private var progressSaveTask: Task<Void, Never>?
+    @State private var searchTask: Task<Void, Never>?
     @State private var scrollProxy: ScrollViewProxy?
     @State private var viewportHeight: CGFloat = 0
 
@@ -1458,7 +1460,7 @@ struct ReaderView: View {
             await loadContent()
         }
         .onChange(of: searchText) { _, _ in
-            recomputeSearchMatches()
+            scheduleSearchRecompute()
         }
         .onChange(of: currentMatchIndex) { _, _ in
             scrollToCurrentMatch()
@@ -1522,6 +1524,7 @@ struct ReaderView: View {
             }
         }
         .onDisappear {
+            searchTask?.cancel()
             progressSaveTask?.cancel()
             saveProgress()
         }
@@ -1611,7 +1614,9 @@ struct ReaderView: View {
 
     private func loadContent() async {
         isLoadingContent = true
+        searchTask?.cancel()
         searchMatches = []
+        matchesByParagraph = [:]
         currentMatchIndex = 0
         switch book.format {
         case .pdf:
@@ -1627,10 +1632,7 @@ struct ReaderView: View {
         default:
             let content = book.content
             let computedParagraphs = await Task.detached(priority: .userInitiated) {
-                content
-                    .components(separatedBy: "\n\n")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
+                Self.splitParagraphs(from: content)
             }.value
             await MainActor.run {
                 self.paragraphs = computedParagraphs
@@ -1638,10 +1640,46 @@ struct ReaderView: View {
                 self.isRestoringTextPosition = book.lastProgress > 0 && !computedParagraphs.isEmpty
                 self.isLoadingContent = false
                 if !self.searchText.isEmpty {
-                    self.recomputeSearchMatches()
+                    self.scheduleSearchRecompute(immediate: true)
                 }
             }
         }
+    }
+
+    private static func splitParagraphs(from rawContent: String) -> [String] {
+        let normalized = rawContent
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
+        let doubleNewlineChunks = normalized
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if doubleNewlineChunks.count <= 1, normalized.contains("\n") {
+            let singleLineChunks = normalized
+                .components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if singleLineChunks.count > 1 {
+                return singleLineChunks
+            }
+        }
+
+        var result: [String] = []
+        result.reserveCapacity(doubleNewlineChunks.count)
+        for chunk in doubleNewlineChunks {
+            if chunk.count > 4000, chunk.contains("\n") {
+                let subChunks = chunk
+                    .components(separatedBy: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                result.append(contentsOf: subChunks)
+            } else {
+                result.append(chunk)
+            }
+        }
+        return result
     }
 
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
@@ -1692,23 +1730,47 @@ struct ReaderView: View {
         }
     }
 
-    private func recomputeSearchMatches() {
-        guard !searchText.isEmpty, book.format != .pdf else {
+    private func scheduleSearchRecompute(immediate: Bool = false) {
+        searchTask?.cancel()
+        let query = searchText
+        let currentParagraphs = paragraphs
+        let isPDF = book.format == .pdf
+
+        guard !query.isEmpty, !isPDF else {
             searchMatches = []
+            matchesByParagraph = [:]
             currentMatchIndex = 0
             return
         }
-        var matches: [SearchMatch] = []
-        for (index, paragraph) in paragraphs.enumerated() {
-            var searchStart = paragraph.startIndex
-            while let range = paragraph.range(of: searchText, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
-                matches.append(SearchMatch(paragraphIndex: index, range: range))
-                searchStart = range.upperBound
+
+        searchTask = Task.detached(priority: .userInitiated) {
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+            }
+
+            var matches: [SearchMatch] = []
+            var grouped: [Int: [Int]] = [:]
+
+            for (index, paragraph) in currentParagraphs.enumerated() {
+                if Task.isCancelled { return }
+                var searchStart = paragraph.startIndex
+                while let range = paragraph.range(of: query, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
+                    let matchIdx = matches.count
+                    matches.append(SearchMatch(paragraphIndex: index, range: range))
+                    grouped[index, default: []].append(matchIdx)
+                    searchStart = range.upperBound
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self.searchMatches = matches
+                self.matchesByParagraph = grouped
+                self.currentMatchIndex = 0
+                self.scrollToCurrentMatch()
             }
         }
-        searchMatches = matches
-        currentMatchIndex = 0
-        scrollToCurrentMatch()
     }
 
     private func scrollToCurrentMatch() {
@@ -1720,21 +1782,20 @@ struct ReaderView: View {
     }
 
     private func highlightedText(for paragraph: String, paragraphIndex: Int) -> AttributedString {
-        guard isSearchActive, !searchText.isEmpty else {
+        guard isSearchActive,
+              !searchText.isEmpty,
+              let matchIndices = matchesByParagraph[paragraphIndex],
+              !matchIndices.isEmpty else {
             return AttributedString(paragraph)
         }
 
         var attributed = AttributedString(paragraph)
-        var searchStart = paragraph.startIndex
-
-        while let range = paragraph.range(of: searchText, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
+        for matchIdx in matchIndices {
+            guard searchMatches.indices.contains(matchIdx) else { continue }
+            let range = searchMatches[matchIdx].range
             if let attrRange = Range(range, in: attributed) {
-                let isCurrent = searchMatches.indices.contains(currentMatchIndex)
-                    && searchMatches[currentMatchIndex].paragraphIndex == paragraphIndex
-                    && searchMatches[currentMatchIndex].range == range
-                attributed[attrRange].backgroundColor = isCurrent ? .orange : .yellow.opacity(0.5)
+                attributed[attrRange].backgroundColor = (matchIdx == currentMatchIndex) ? .orange : .yellow.opacity(0.5)
             }
-            searchStart = range.upperBound
         }
 
         return attributed
