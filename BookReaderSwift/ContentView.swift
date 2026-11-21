@@ -360,11 +360,19 @@ struct EPUBParser {
         guard let archive = ZipArchive(data: data) else { return nil }
 
         var entriesByName: [String: ZipArchive.Entry] = [:]
-        for entry in archive.entries where entriesByName[entry.name] == nil {
-            entriesByName[entry.name] = entry
+        var entriesByLowercasedName: [String: ZipArchive.Entry] = [:]
+        for entry in archive.entries {
+            let normalizedName = normalizePath(basePath: "", href: entry.name)
+            if entriesByName[normalizedName] == nil {
+                entriesByName[normalizedName] = entry
+            }
+            let lower = normalizedName.lowercased()
+            if entriesByLowercasedName[lower] == nil {
+                entriesByLowercasedName[lower] = entry
+            }
         }
 
-        guard let containerEntry = entriesByName["META-INF/container.xml"],
+        guard let containerEntry = entriesByName["META-INF/container.xml"] ?? entriesByLowercasedName["meta-inf/container.xml"],
               let containerData = archive.contents(of: containerEntry) else {
             return nil
         }
@@ -372,12 +380,18 @@ struct EPUBParser {
 
         guard let opfPath = extractOPFPath(from: containerXML) else { return nil }
 
-        guard let opfEntry = findEntry(href: opfPath, basePath: "", in: entriesByName),
+        guard let opfEntry = findEntry(
+            href: opfPath,
+            basePath: "",
+            in: entriesByName,
+            lowercasedEntries: entriesByLowercasedName
+        ),
               let opfData = archive.contents(of: opfEntry) else {
             return nil
         }
         let opfXML = TextDecoding.decodeTextFile(opfData)
-        let basePath = (opfEntry.name as NSString).deletingLastPathComponent
+        let normalizedOpfName = normalizePath(basePath: "", href: opfEntry.name)
+        let basePath = (normalizedOpfName as NSString).deletingLastPathComponent
 
         let title = extractMetadataTag("title", from: opfXML)
         let author = extractMetadataTag("creator", from: opfXML)
@@ -388,7 +402,12 @@ struct EPUBParser {
         var chapters: [String] = []
         for idref in spine {
             guard let href = manifest[idref],
-                  let entry = findEntry(href: href, basePath: basePath, in: entriesByName),
+                  let entry = findEntry(
+                    href: href,
+                    basePath: basePath,
+                    in: entriesByName,
+                    lowercasedEntries: entriesByLowercasedName
+                  ),
                   let itemData = archive.contents(of: entry) else { continue }
 
             let html = TextDecoding.decodeTextFile(itemData)
@@ -406,7 +425,8 @@ struct EPUBParser {
     private static func findEntry(
         href: String,
         basePath: String,
-        in entries: [String: ZipArchive.Entry]
+        in entries: [String: ZipArchive.Entry],
+        lowercasedEntries: [String: ZipArchive.Entry]
     ) -> ZipArchive.Entry? {
         let withoutFragment = href
             .split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
@@ -419,13 +439,15 @@ struct EPUBParser {
         }
 
         for variant in variants {
-            if let entry = entries[normalizePath(basePath: basePath, href: variant)] {
+            let candidate = normalizePath(basePath: basePath, href: variant)
+            if let entry = entries[candidate] ?? lowercasedEntries[candidate.lowercased()] {
                 return entry
             }
         }
 
         for variant in variants {
-            if let entry = entries[normalizePath(basePath: "", href: variant)] {
+            let candidate = normalizePath(basePath: "", href: variant)
+            if let entry = entries[candidate] ?? lowercasedEntries[candidate.lowercased()] {
                 return entry
             }
         }
@@ -434,7 +456,9 @@ struct EPUBParser {
     }
 
     private static func normalizePath(basePath: String, href: String) -> String {
-        let combined = basePath.isEmpty ? href : basePath + "/" + href
+        let sanitizedBase = basePath.replacingOccurrences(of: "\\", with: "/")
+        let sanitizedHref = href.replacingOccurrences(of: "\\", with: "/")
+        let combined = sanitizedBase.isEmpty ? sanitizedHref : sanitizedBase + "/" + sanitizedHref
         var parts: [Substring] = []
         for part in combined.split(separator: "/", omittingEmptySubsequences: true) {
             if part == "." { continue }
@@ -448,10 +472,16 @@ struct EPUBParser {
     }
 
     private static func extractOPFPath(from xml: String) -> String? {
-        guard let range = xml.range(of: "full-path=\"") else { return nil }
-        let rest = xml[range.upperBound...]
-        guard let endRange = rest.range(of: "\"") else { return nil }
-        return String(rest[..<endRange.lowerBound])
+        let pattern = #"full-path\s*=\s*["']([^"']+)["']"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return nil
+        }
+        let nsString = xml as NSString
+        guard let match = regex.firstMatch(in: xml, range: NSRange(location: 0, length: nsString.length)),
+              match.numberOfRanges >= 2 else {
+            return nil
+        }
+        return decodeEntities(nsString.substring(with: match.range(at: 1)))
     }
 
     private static func extractMetadataTag(_ localName: String, from xml: String) -> String? {
@@ -581,8 +611,9 @@ struct EPUBParser {
 
         let removalPatterns = [
             #"(?s)<!--.*?-->"#,
-            #"(?is)<(?:script|style)\b[^>]*/>"#,
+            #"(?is)<(?:script|style|title)\b[^>]*/>"#,
             #"(?is)<head\b[^>]*>.*?</head\s*>"#,
+            #"(?is)<title\b[^>]*>.*?</title\s*>"#,
             #"(?is)<style\b[^>]*>.*?</style\s*>"#,
             #"(?is)<script\b[^>]*>.*?</script\s*>"#
         ]
