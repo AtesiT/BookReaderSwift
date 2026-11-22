@@ -631,9 +631,19 @@ struct EPUBParser {
 
         text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
 
-        text = text.replacingOccurrences(of: #"(?i)<br\s*/?>"#, with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)<(?:br|hr)\s*/?>"#, with: "\n", options: .regularExpression)
         text = text.replacingOccurrences(
-            of: #"(?i)</(?:p|div|h[1-6]|li|blockquote|section|article|tr|pre)\s*>"#,
+            of: #"(?i)</(?:td|th|dt|dd)\s*>"#,
+            with: " ",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"(?i)<(?:p|div|h[1-6]|li|blockquote|section|article|tr|pre|figcaption|address|header|footer)\b[^>]*>"#,
+            with: "\n\n",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"(?i)</(?:p|div|h[1-6]|li|blockquote|section|article|tr|pre|figcaption|address|header|footer)\s*>"#,
             with: "\n\n",
             options: .regularExpression
         )
