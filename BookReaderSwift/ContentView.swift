@@ -552,15 +552,20 @@ struct EPUBParser {
 
     private static func parseAttributes(from fragment: String) -> [String: String] {
         var result: [String: String] = [:]
-        let pattern = #"(\w[\w-]*)="([^"]*)""#
+        let pattern = #"(\w[\w-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
         let nsString = fragment as NSString
         let matches = regex.matches(in: fragment, range: NSRange(location: 0, length: nsString.length))
         for match in matches {
-            guard match.numberOfRanges == 3 else { continue }
+            guard match.numberOfRanges == 4 else { continue }
             let key = nsString.substring(with: match.range(at: 1))
-            let value = nsString.substring(with: match.range(at: 2))
-            result[key] = value
+            let doubleQuotedRange = match.range(at: 2)
+            let singleQuotedRange = match.range(at: 3)
+            if doubleQuotedRange.location != NSNotFound {
+                result[key] = nsString.substring(with: doubleQuotedRange)
+            } else if singleQuotedRange.location != NSNotFound {
+                result[key] = nsString.substring(with: singleQuotedRange)
+            }
         }
         return result
     }
@@ -791,6 +796,7 @@ struct ContentView: View {
             showStartupMessageIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
+            guard !isProcessingImport else { return }
             isImporterPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .closeBookRequested)) { _ in
@@ -813,6 +819,7 @@ struct ContentView: View {
                 Spacer()
 
                 ToolbarIconButton(systemImage: "plus") {
+                    guard !isProcessingImport else { return }
                     isImporterPresented = true
                 }
             }
@@ -859,6 +866,7 @@ struct ContentView: View {
             }
         } else if books.isEmpty {
             EmptyLibraryView {
+                guard !isProcessingImport else { return }
                 isImporterPresented = true
             }
         } else {
@@ -885,7 +893,7 @@ struct ContentView: View {
     private func handleImportResult(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            guard let url = urls.first else { return }
+            guard let url = urls.first, !isProcessingImport else { return }
             importFile(at: url)
         case .failure(let error):
             errorMessage = "Не удалось выбрать файл: \(error.localizedDescription)"
@@ -1518,11 +1526,11 @@ struct ReaderView: View {
             isAddingBookmark = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .nextMatchRequested)) { _ in
-            guard !searchMatches.isEmpty else { return }
+            guard isSearchActive, !searchMatches.isEmpty else { return }
             currentMatchIndex = (currentMatchIndex + 1) % searchMatches.count
         }
         .onReceive(NotificationCenter.default.publisher(for: .previousMatchRequested)) { _ in
-            guard !searchMatches.isEmpty else { return }
+            guard isSearchActive, !searchMatches.isEmpty else { return }
             currentMatchIndex = (currentMatchIndex + searchMatches.count - 1) % searchMatches.count
         }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
@@ -1661,6 +1669,7 @@ struct ReaderView: View {
             await MainActor.run {
                 self.pdfDocument = document
                 self.pdfProgress = book.lastProgress
+                self.pdfPageIndex = book.lastPageIndex
                 self.isLoadingContent = false
             }
         default:
