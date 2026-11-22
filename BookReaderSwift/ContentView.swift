@@ -925,8 +925,8 @@ struct ContentView: View {
 
     private func importPDF(at url: URL) {
         isProcessingImport = true
+        let needsSecurityScope = url.startAccessingSecurityScopedResource()
         Task.detached(priority: .userInitiated) {
-            let needsSecurityScope = url.startAccessingSecurityScopedResource()
             defer {
                 if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
             }
@@ -951,8 +951,8 @@ struct ContentView: View {
 
     private func importPlainText(at url: URL, isMarkdown: Bool) {
         isProcessingImport = true
+        let needsSecurityScope = url.startAccessingSecurityScopedResource()
         Task.detached(priority: .userInitiated) {
-            let needsSecurityScope = url.startAccessingSecurityScopedResource()
             defer {
                 if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
             }
@@ -978,8 +978,8 @@ struct ContentView: View {
 
     private func importEPUB(at url: URL) {
         isProcessingImport = true
+        let needsSecurityScope = url.startAccessingSecurityScopedResource()
         Task.detached(priority: .userInitiated) {
-            let needsSecurityScope = url.startAccessingSecurityScopedResource()
             defer {
                 if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
             }
@@ -1349,6 +1349,10 @@ struct ReaderToolbarContent: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 200)
                         .focused($isSearchFieldFocused)
+                        .onExitCommand {
+                            isSearchActive = false
+                            searchText = ""
+                        }
 
                     if matchCount > 0 {
                         Text("\(currentMatchIndex + 1)/\(matchCount)")
