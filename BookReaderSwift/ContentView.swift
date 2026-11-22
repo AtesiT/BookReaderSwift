@@ -235,7 +235,10 @@ struct ZipArchive {
             let nameStart = offset + 46
             guard nameStart + nameLength <= data.count else { break }
             let nameData = data.subdata(in: nameStart..<nameStart + nameLength)
-            let name = String(data: nameData, encoding: .utf8) ?? ""
+            let name = String(data: nameData, encoding: .utf8)
+                ?? String(data: nameData, encoding: .windowsCP1251)
+                ?? String(data: nameData, encoding: .isoLatin1)
+                ?? ""
 
             entries.append(Entry(
                 name: name,
@@ -1154,7 +1157,7 @@ struct LibrarySectionView: View {
         Section("Библиотека") {
             ForEach(books) { book in
                 SidebarRow(book: book, isSelected: currentBook?.persistentModelID == book.persistentModelID)
-                    .tag(book)
+                    .tag(Optional(book))
                     .contextMenu {
                         Button("Переименовать") { onRename(book) }
                         Button("Удалить", role: .destructive) { onDelete(book) }
