@@ -235,7 +235,10 @@ struct ZipArchive {
             let nameStart = offset + 46
             guard nameStart + nameLength <= data.count else { break }
             let nameData = data.subdata(in: nameStart..<nameStart + nameLength)
-            let name = String(data: nameData, encoding: .utf8) ?? ""
+            let name = String(data: nameData, encoding: .utf8)
+                ?? String(data: nameData, encoding: .windowsCP1251)
+                ?? String(data: nameData, encoding: .isoLatin1)
+                ?? ""
 
             entries.append(Entry(
                 name: name,
@@ -360,11 +363,19 @@ struct EPUBParser {
         guard let archive = ZipArchive(data: data) else { return nil }
 
         var entriesByName: [String: ZipArchive.Entry] = [:]
-        for entry in archive.entries where entriesByName[entry.name] == nil {
-            entriesByName[entry.name] = entry
+        var entriesByLowercasedName: [String: ZipArchive.Entry] = [:]
+        for entry in archive.entries {
+            let normalizedName = normalizePath(basePath: "", href: entry.name)
+            if entriesByName[normalizedName] == nil {
+                entriesByName[normalizedName] = entry
+            }
+            let lower = normalizedName.lowercased()
+            if entriesByLowercasedName[lower] == nil {
+                entriesByLowercasedName[lower] = entry
+            }
         }
 
-        guard let containerEntry = entriesByName["META-INF/container.xml"],
+        guard let containerEntry = entriesByName["META-INF/container.xml"] ?? entriesByLowercasedName["meta-inf/container.xml"],
               let containerData = archive.contents(of: containerEntry) else {
             return nil
         }
@@ -372,12 +383,18 @@ struct EPUBParser {
 
         guard let opfPath = extractOPFPath(from: containerXML) else { return nil }
 
-        guard let opfEntry = findEntry(href: opfPath, basePath: "", in: entriesByName),
+        guard let opfEntry = findEntry(
+            href: opfPath,
+            basePath: "",
+            in: entriesByName,
+            lowercasedEntries: entriesByLowercasedName
+        ),
               let opfData = archive.contents(of: opfEntry) else {
             return nil
         }
         let opfXML = TextDecoding.decodeTextFile(opfData)
-        let basePath = (opfEntry.name as NSString).deletingLastPathComponent
+        let normalizedOpfName = normalizePath(basePath: "", href: opfEntry.name)
+        let basePath = (normalizedOpfName as NSString).deletingLastPathComponent
 
         let title = extractMetadataTag("title", from: opfXML)
         let author = extractMetadataTag("creator", from: opfXML)
@@ -388,7 +405,12 @@ struct EPUBParser {
         var chapters: [String] = []
         for idref in spine {
             guard let href = manifest[idref],
-                  let entry = findEntry(href: href, basePath: basePath, in: entriesByName),
+                  let entry = findEntry(
+                    href: href,
+                    basePath: basePath,
+                    in: entriesByName,
+                    lowercasedEntries: entriesByLowercasedName
+                  ),
                   let itemData = archive.contents(of: entry) else { continue }
 
             let html = TextDecoding.decodeTextFile(itemData)
@@ -406,7 +428,8 @@ struct EPUBParser {
     private static func findEntry(
         href: String,
         basePath: String,
-        in entries: [String: ZipArchive.Entry]
+        in entries: [String: ZipArchive.Entry],
+        lowercasedEntries: [String: ZipArchive.Entry]
     ) -> ZipArchive.Entry? {
         let withoutFragment = href
             .split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
@@ -419,13 +442,15 @@ struct EPUBParser {
         }
 
         for variant in variants {
-            if let entry = entries[normalizePath(basePath: basePath, href: variant)] {
+            let candidate = normalizePath(basePath: basePath, href: variant)
+            if let entry = entries[candidate] ?? lowercasedEntries[candidate.lowercased()] {
                 return entry
             }
         }
 
         for variant in variants {
-            if let entry = entries[normalizePath(basePath: "", href: variant)] {
+            let candidate = normalizePath(basePath: "", href: variant)
+            if let entry = entries[candidate] ?? lowercasedEntries[candidate.lowercased()] {
                 return entry
             }
         }
@@ -434,7 +459,9 @@ struct EPUBParser {
     }
 
     private static func normalizePath(basePath: String, href: String) -> String {
-        let combined = basePath.isEmpty ? href : basePath + "/" + href
+        let sanitizedBase = basePath.replacingOccurrences(of: "\\", with: "/")
+        let sanitizedHref = href.replacingOccurrences(of: "\\", with: "/")
+        let combined = sanitizedBase.isEmpty ? sanitizedHref : sanitizedBase + "/" + sanitizedHref
         var parts: [Substring] = []
         for part in combined.split(separator: "/", omittingEmptySubsequences: true) {
             if part == "." { continue }
@@ -448,10 +475,16 @@ struct EPUBParser {
     }
 
     private static func extractOPFPath(from xml: String) -> String? {
-        guard let range = xml.range(of: "full-path=\"") else { return nil }
-        let rest = xml[range.upperBound...]
-        guard let endRange = rest.range(of: "\"") else { return nil }
-        return String(rest[..<endRange.lowerBound])
+        let pattern = #"full-path\s*=\s*["']([^"']+)["']"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return nil
+        }
+        let nsString = xml as NSString
+        guard let match = regex.firstMatch(in: xml, range: NSRange(location: 0, length: nsString.length)),
+              match.numberOfRanges >= 2 else {
+            return nil
+        }
+        return decodeEntities(nsString.substring(with: match.range(at: 1)))
     }
 
     private static func extractMetadataTag(_ localName: String, from xml: String) -> String? {
@@ -519,15 +552,20 @@ struct EPUBParser {
 
     private static func parseAttributes(from fragment: String) -> [String: String] {
         var result: [String: String] = [:]
-        let pattern = #"(\w[\w-]*)="([^"]*)""#
+        let pattern = #"(\w[\w-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
         let nsString = fragment as NSString
         let matches = regex.matches(in: fragment, range: NSRange(location: 0, length: nsString.length))
         for match in matches {
-            guard match.numberOfRanges == 3 else { continue }
+            guard match.numberOfRanges == 4 else { continue }
             let key = nsString.substring(with: match.range(at: 1))
-            let value = nsString.substring(with: match.range(at: 2))
-            result[key] = value
+            let doubleQuotedRange = match.range(at: 2)
+            let singleQuotedRange = match.range(at: 3)
+            if doubleQuotedRange.location != NSNotFound {
+                result[key] = nsString.substring(with: doubleQuotedRange)
+            } else if singleQuotedRange.location != NSNotFound {
+                result[key] = nsString.substring(with: singleQuotedRange)
+            }
         }
         return result
     }
@@ -581,8 +619,9 @@ struct EPUBParser {
 
         let removalPatterns = [
             #"(?s)<!--.*?-->"#,
-            #"(?is)<(?:script|style)\b[^>]*/>"#,
+            #"(?is)<(?:script|style|title)\b[^>]*/>"#,
             #"(?is)<head\b[^>]*>.*?</head\s*>"#,
+            #"(?is)<title\b[^>]*>.*?</title\s*>"#,
             #"(?is)<style\b[^>]*>.*?</style\s*>"#,
             #"(?is)<script\b[^>]*>.*?</script\s*>"#
         ]
@@ -592,9 +631,19 @@ struct EPUBParser {
 
         text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
 
-        text = text.replacingOccurrences(of: #"(?i)<br\s*/?>"#, with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)<(?:br|hr)\s*/?>"#, with: "\n", options: .regularExpression)
         text = text.replacingOccurrences(
-            of: #"(?i)</(?:p|div|h[1-6]|li|blockquote|section|article|tr|pre)\s*>"#,
+            of: #"(?i)</(?:td|th|dt|dd)\s*>"#,
+            with: " ",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"(?i)<(?:p|div|h[1-6]|li|blockquote|section|article|tr|pre|figcaption|address|header|footer)\b[^>]*>"#,
+            with: "\n\n",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"(?i)</(?:p|div|h[1-6]|li|blockquote|section|article|tr|pre|figcaption|address|header|footer)\s*>"#,
             with: "\n\n",
             options: .regularExpression
         )
@@ -757,6 +806,7 @@ struct ContentView: View {
             showStartupMessageIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
+            guard !isProcessingImport else { return }
             isImporterPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .closeBookRequested)) { _ in
@@ -779,6 +829,7 @@ struct ContentView: View {
                 Spacer()
 
                 ToolbarIconButton(systemImage: "plus") {
+                    guard !isProcessingImport else { return }
                     isImporterPresented = true
                 }
             }
@@ -825,6 +876,7 @@ struct ContentView: View {
             }
         } else if books.isEmpty {
             EmptyLibraryView {
+                guard !isProcessingImport else { return }
                 isImporterPresented = true
             }
         } else {
@@ -851,7 +903,7 @@ struct ContentView: View {
     private func handleImportResult(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            guard let url = urls.first else { return }
+            guard let url = urls.first, !isProcessingImport else { return }
             importFile(at: url)
         case .failure(let error):
             errorMessage = "Не удалось выбрать файл: \(error.localizedDescription)"
@@ -873,8 +925,8 @@ struct ContentView: View {
 
     private func importPDF(at url: URL) {
         isProcessingImport = true
+        let needsSecurityScope = url.startAccessingSecurityScopedResource()
         Task.detached(priority: .userInitiated) {
-            let needsSecurityScope = url.startAccessingSecurityScopedResource()
             defer {
                 if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
             }
@@ -899,8 +951,8 @@ struct ContentView: View {
 
     private func importPlainText(at url: URL, isMarkdown: Bool) {
         isProcessingImport = true
+        let needsSecurityScope = url.startAccessingSecurityScopedResource()
         Task.detached(priority: .userInitiated) {
-            let needsSecurityScope = url.startAccessingSecurityScopedResource()
             defer {
                 if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
             }
@@ -926,8 +978,8 @@ struct ContentView: View {
 
     private func importEPUB(at url: URL) {
         isProcessingImport = true
+        let needsSecurityScope = url.startAccessingSecurityScopedResource()
         Task.detached(priority: .userInitiated) {
-            let needsSecurityScope = url.startAccessingSecurityScopedResource()
             defer {
                 if needsSecurityScope { url.stopAccessingSecurityScopedResource() }
             }
@@ -1123,7 +1175,7 @@ struct LibrarySectionView: View {
         Section("Библиотека") {
             ForEach(books) { book in
                 SidebarRow(book: book, isSelected: currentBook?.persistentModelID == book.persistentModelID)
-                    .tag(book)
+                    .tag(Optional(book))
                     .contextMenu {
                         Button("Переименовать") { onRename(book) }
                         Button("Удалить", role: .destructive) { onDelete(book) }
@@ -1157,7 +1209,7 @@ struct SidebarRow: View {
             Spacer()
 
             if book.lastProgress > 0 {
-                Text("\(Int(book.lastProgress * 100))%")
+                Text("\(Int((book.lastProgress * 100).rounded()))%")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1201,7 +1253,7 @@ struct BookmarkRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(bookmark.label)
                     .lineLimit(1)
-                Text("\(Int(bookmark.progress * 100))%")
+                Text("\(Int((bookmark.progress * 100).rounded()))%")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1272,6 +1324,7 @@ struct ReaderToolbarContent: View {
     let matchCount: Int
     @Binding var currentMatchIndex: Int
     let searchFocusTrigger: Int
+    let isBookmarkDisabled: Bool
     var onClose: () -> Void
     var onAddBookmark: () -> Void
 
@@ -1297,6 +1350,10 @@ struct ReaderToolbarContent: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 200)
                         .focused($isSearchFieldFocused)
+                        .onExitCommand {
+                            isSearchActive = false
+                            searchText = ""
+                        }
 
                     if matchCount > 0 {
                         Text("\(currentMatchIndex + 1)/\(matchCount)")
@@ -1332,6 +1389,7 @@ struct ReaderToolbarContent: View {
             ToolbarIconButton(systemImage: "bookmark") {
                 onAddBookmark()
             }
+            .disabled(isBookmarkDisabled)
 
             Menu {
                 Picker("Тема", selection: $theme) {
@@ -1377,6 +1435,7 @@ struct ReaderView: View {
     @State private var totalContentLength: Int = 0
     @State private var searchText: String = ""
     @State private var searchMatches: [SearchMatch] = []
+    @State private var matchesByParagraph: [Int: [Int]] = [:]
     @State private var currentMatchIndex: Int = 0
     @State private var isSearchActive = false
     @State private var searchFocusTrigger: Int = 0
@@ -1388,8 +1447,11 @@ struct ReaderView: View {
     @State private var isLoadingContent = true
     @State private var isRestoringTextPosition = false
     @State private var progressSaveTask: Task<Void, Never>?
+    @State private var searchTask: Task<Void, Never>?
     @State private var scrollProxy: ScrollViewProxy?
     @State private var viewportHeight: CGFloat = 0
+
+    @FocusState private var isBookmarkFieldFocused: Bool
 
     private struct ReaderTaskID: Equatable {
         let bookID: PersistentIdentifier
@@ -1445,6 +1507,7 @@ struct ReaderView: View {
                 matchCount: searchMatches.count,
                 currentMatchIndex: $currentMatchIndex,
                 searchFocusTrigger: searchFocusTrigger,
+                isBookmarkDisabled: isLoadingContent,
                 onClose: onClose,
                 onAddBookmark: { isAddingBookmark = true }
             )
@@ -1458,7 +1521,7 @@ struct ReaderView: View {
             await loadContent()
         }
         .onChange(of: searchText) { _, _ in
-            recomputeSearchMatches()
+            scheduleSearchRecompute()
         }
         .onChange(of: currentMatchIndex) { _, _ in
             scrollToCurrentMatch()
@@ -1479,14 +1542,15 @@ struct ReaderView: View {
             searchFocusTrigger += 1
         }
         .onReceive(NotificationCenter.default.publisher(for: .addBookmarkRequested)) { _ in
+            guard !isLoadingContent else { return }
             isAddingBookmark = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .nextMatchRequested)) { _ in
-            guard !searchMatches.isEmpty else { return }
+            guard isSearchActive, !searchMatches.isEmpty else { return }
             currentMatchIndex = (currentMatchIndex + 1) % searchMatches.count
         }
         .onReceive(NotificationCenter.default.publisher(for: .previousMatchRequested)) { _ in
-            guard !searchMatches.isEmpty else { return }
+            guard isSearchActive, !searchMatches.isEmpty else { return }
             currentMatchIndex = (currentMatchIndex + searchMatches.count - 1) % searchMatches.count
         }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSizeRequested)) { _ in
@@ -1496,12 +1560,15 @@ struct ReaderView: View {
             storedFontSize = max(storedFontSize - 1, 12)
         }
         .onReceive(NotificationCenter.default.publisher(for: .jumpToProgressRequested)) { notification in
-            guard book.format != .pdf,
-                  let progress = notification.userInfo?["progress"] as? Double,
-                  !paragraphs.isEmpty else { return }
+            guard let progress = notification.userInfo?["progress"] as? Double else { return }
             progressSaveTask?.cancel()
-            isRestoringTextPosition = true
             book.lastProgress = progress
+            if book.format == .pdf {
+                pdfProgress = progress
+                return
+            }
+            guard !paragraphs.isEmpty else { return }
+            isRestoringTextPosition = true
             let index = min(max(Int(Double(paragraphs.count) * progress), 0), paragraphs.count - 1)
             withAnimation {
                 scrollProxy?.scrollTo(index, anchor: .top)
@@ -1513,7 +1580,18 @@ struct ReaderView: View {
         .sheet(isPresented: $isAddingBookmark) {
             addBookmarkSheet
         }
+        .onChange(of: isAddingBookmark) { _, newValue in
+            if newValue {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    isBookmarkFieldFocused = true
+                }
+            } else {
+                isBookmarkFieldFocused = false
+                newBookmarkLabel = ""
+            }
+        }
         .onDisappear {
+            searchTask?.cancel()
             progressSaveTask?.cancel()
             saveProgress()
         }
@@ -1585,6 +1663,7 @@ struct ReaderView: View {
                 .font(.headline)
             TextField("Название закладки", text: $newBookmarkLabel)
                 .textFieldStyle(.roundedBorder)
+                .focused($isBookmarkFieldFocused)
             HStack {
                 Button("Отмена", role: .cancel) {
                     isAddingBookmark = false
@@ -1603,7 +1682,9 @@ struct ReaderView: View {
 
     private func loadContent() async {
         isLoadingContent = true
+        searchTask?.cancel()
         searchMatches = []
+        matchesByParagraph = [:]
         currentMatchIndex = 0
         switch book.format {
         case .pdf:
@@ -1614,15 +1695,13 @@ struct ReaderView: View {
             await MainActor.run {
                 self.pdfDocument = document
                 self.pdfProgress = book.lastProgress
+                self.pdfPageIndex = book.lastPageIndex
                 self.isLoadingContent = false
             }
         default:
             let content = book.content
             let computedParagraphs = await Task.detached(priority: .userInitiated) {
-                content
-                    .components(separatedBy: "\n\n")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
+                Self.splitParagraphs(from: content)
             }.value
             await MainActor.run {
                 self.paragraphs = computedParagraphs
@@ -1630,10 +1709,46 @@ struct ReaderView: View {
                 self.isRestoringTextPosition = book.lastProgress > 0 && !computedParagraphs.isEmpty
                 self.isLoadingContent = false
                 if !self.searchText.isEmpty {
-                    self.recomputeSearchMatches()
+                    self.scheduleSearchRecompute(immediate: true)
                 }
             }
         }
+    }
+
+    private static func splitParagraphs(from rawContent: String) -> [String] {
+        let normalized = rawContent
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
+        let doubleNewlineChunks = normalized
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if doubleNewlineChunks.count <= 1, normalized.contains("\n") {
+            let singleLineChunks = normalized
+                .components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if singleLineChunks.count > 1 {
+                return singleLineChunks
+            }
+        }
+
+        var result: [String] = []
+        result.reserveCapacity(doubleNewlineChunks.count)
+        for chunk in doubleNewlineChunks {
+            if chunk.count > 4000, chunk.contains("\n") {
+                let subChunks = chunk
+                    .components(separatedBy: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                result.append(contentsOf: subChunks)
+            } else {
+                result.append(chunk)
+            }
+        }
+        return result
     }
 
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
@@ -1684,23 +1799,47 @@ struct ReaderView: View {
         }
     }
 
-    private func recomputeSearchMatches() {
-        guard !searchText.isEmpty, book.format != .pdf else {
+    private func scheduleSearchRecompute(immediate: Bool = false) {
+        searchTask?.cancel()
+        let query = searchText
+        let currentParagraphs = paragraphs
+        let isPDF = book.format == .pdf
+
+        guard !query.isEmpty, !isPDF else {
             searchMatches = []
+            matchesByParagraph = [:]
             currentMatchIndex = 0
             return
         }
-        var matches: [SearchMatch] = []
-        for (index, paragraph) in paragraphs.enumerated() {
-            var searchStart = paragraph.startIndex
-            while let range = paragraph.range(of: searchText, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
-                matches.append(SearchMatch(paragraphIndex: index, range: range))
-                searchStart = range.upperBound
+
+        searchTask = Task.detached(priority: .userInitiated) {
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+            }
+
+            var matches: [SearchMatch] = []
+            var grouped: [Int: [Int]] = [:]
+
+            for (index, paragraph) in currentParagraphs.enumerated() {
+                if Task.isCancelled { return }
+                var searchStart = paragraph.startIndex
+                while let range = paragraph.range(of: query, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
+                    let matchIdx = matches.count
+                    matches.append(SearchMatch(paragraphIndex: index, range: range))
+                    grouped[index, default: []].append(matchIdx)
+                    searchStart = range.upperBound
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self.searchMatches = matches
+                self.matchesByParagraph = grouped
+                self.currentMatchIndex = 0
+                self.scrollToCurrentMatch()
             }
         }
-        searchMatches = matches
-        currentMatchIndex = 0
-        scrollToCurrentMatch()
     }
 
     private func scrollToCurrentMatch() {
@@ -1712,21 +1851,20 @@ struct ReaderView: View {
     }
 
     private func highlightedText(for paragraph: String, paragraphIndex: Int) -> AttributedString {
-        guard isSearchActive, !searchText.isEmpty else {
+        guard isSearchActive,
+              !searchText.isEmpty,
+              let matchIndices = matchesByParagraph[paragraphIndex],
+              !matchIndices.isEmpty else {
             return AttributedString(paragraph)
         }
 
         var attributed = AttributedString(paragraph)
-        var searchStart = paragraph.startIndex
-
-        while let range = paragraph.range(of: searchText, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
+        for matchIdx in matchIndices {
+            guard searchMatches.indices.contains(matchIdx) else { continue }
+            let range = searchMatches[matchIdx].range
             if let attrRange = Range(range, in: attributed) {
-                let isCurrent = searchMatches.indices.contains(currentMatchIndex)
-                    && searchMatches[currentMatchIndex].paragraphIndex == paragraphIndex
-                    && searchMatches[currentMatchIndex].range == range
-                attributed[attrRange].backgroundColor = isCurrent ? .orange : .yellow.opacity(0.5)
+                attributed[attrRange].backgroundColor = (matchIdx == currentMatchIndex) ? .orange : .yellow.opacity(0.5)
             }
-            searchStart = range.upperBound
         }
 
         return attributed
