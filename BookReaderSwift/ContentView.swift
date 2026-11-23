@@ -365,22 +365,22 @@ struct EPUBParser {
         }
 
         guard let containerEntry = entriesByName["META-INF/container.xml"],
-              let containerData = archive.contents(of: containerEntry),
-              let containerXML = String(data: containerData, encoding: .utf8) else {
+              let containerData = archive.contents(of: containerEntry) else {
             return nil
         }
+        let containerXML = TextDecoding.decodeTextFile(containerData)
 
         guard let opfPath = extractOPFPath(from: containerXML) else { return nil }
 
         guard let opfEntry = findEntry(href: opfPath, basePath: "", in: entriesByName),
-              let opfData = archive.contents(of: opfEntry),
-              let opfXML = String(data: opfData, encoding: .utf8) else {
+              let opfData = archive.contents(of: opfEntry) else {
             return nil
         }
+        let opfXML = TextDecoding.decodeTextFile(opfData)
         let basePath = (opfEntry.name as NSString).deletingLastPathComponent
 
-        let title = extractTag("dc:title", from: opfXML)
-        let author = extractTag("dc:creator", from: opfXML)
+        let title = extractMetadataTag("title", from: opfXML)
+        let author = extractMetadataTag("creator", from: opfXML)
 
         let manifest = extractManifest(from: opfXML)
         let spine = extractSpine(from: opfXML)
@@ -389,9 +389,9 @@ struct EPUBParser {
         for idref in spine {
             guard let href = manifest[idref],
                   let entry = findEntry(href: href, basePath: basePath, in: entriesByName),
-                  let itemData = archive.contents(of: entry),
-                  let html = String(data: itemData, encoding: .utf8) else { continue }
+                  let itemData = archive.contents(of: entry) else { continue }
 
+            let html = TextDecoding.decodeTextFile(itemData)
             let chapterText = stripHTML(html)
             guard !chapterText.isEmpty else { continue }
             chapters.append(chapterText)
@@ -454,13 +454,24 @@ struct EPUBParser {
         return String(rest[..<endRange.lowerBound])
     }
 
-    private static func extractTag(_ tag: String, from xml: String) -> String? {
-        guard let startRange = xml.range(of: "<\(tag)") else { return nil }
-        guard let contentStart = xml.range(of: ">", range: startRange.upperBound..<xml.endIndex) else { return nil }
-        guard let endRange = xml.range(of: "</\(tag)>", range: contentStart.upperBound..<xml.endIndex) else { return nil }
-        let rawValue = String(xml[contentStart.upperBound..<endRange.lowerBound])
+    private static func extractMetadataTag(_ localName: String, from xml: String) -> String? {
+        let escaped = NSRegularExpression.escapedPattern(for: localName)
+        let pattern = "<(?:[A-Za-z0-9_-]+:)?\(escaped)\\b[^>]*>(.*?)</(?:[A-Za-z0-9_-]+:)?\(escaped)\\s*>"
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return nil
+        }
+        let nsString = xml as NSString
+        guard let match = regex.firstMatch(in: xml, range: NSRange(location: 0, length: nsString.length)),
+              match.numberOfRanges >= 2 else {
+            return nil
+        }
+        let rawValue = nsString.substring(with: match.range(at: 1))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return decodeEntities(rawValue)
+        let decoded = decodeEntities(rawValue)
+        return decoded.isEmpty ? nil : decoded
     }
 
     private static func extractManifest(from xml: String) -> [String: String] {
@@ -601,7 +612,47 @@ struct EPUBParser {
 
 enum TextDecoding {
     static func decodeTextFile(_ data: Data) -> String {
-        let encodings: [String.Encoding] = [.utf8, .windowsCP1251, .isoLatin1]
+        let bytes = [UInt8](data.prefix(4))
+
+        if bytes.starts(with: [0xEF, 0xBB, 0xBF]),
+           let string = String(data: data.dropFirst(3), encoding: .utf8) {
+            return string
+        }
+
+        if bytes.starts(with: [0xFF, 0xFE, 0x00, 0x00]),
+           let string = String(data: data.dropFirst(4), encoding: .utf32LittleEndian) {
+            return string
+        }
+
+        if bytes.starts(with: [0x00, 0x00, 0xFE, 0xFF]),
+           let string = String(data: data.dropFirst(4), encoding: .utf32BigEndian) {
+            return string
+        }
+
+        if bytes.starts(with: [0xFF, 0xFE]),
+           let string = String(data: data.dropFirst(2), encoding: .utf16LittleEndian) {
+            return string
+        }
+
+        if bytes.starts(with: [0xFE, 0xFF]),
+           let string = String(data: data.dropFirst(2), encoding: .utf16BigEndian) {
+            return string
+        }
+
+        if let string = String(data: data, encoding: .utf8) {
+            return string
+        }
+
+        if data.count >= 2 && data.count % 2 == 0 && data.contains(0) {
+            if let string = String(data: data, encoding: .utf16LittleEndian) {
+                return string
+            }
+            if let string = String(data: data, encoding: .utf16BigEndian) {
+                return string
+            }
+        }
+
+        let encodings: [String.Encoding] = [.windowsCP1251, .isoLatin1]
         for encoding in encodings {
             if let string = String(data: data, encoding: encoding) {
                 return string
@@ -707,6 +758,9 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
             isImporterPresented = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .closeBookRequested)) { _ in
+            currentBook = nil
         }
     }
 
@@ -1423,6 +1477,9 @@ struct ReaderView: View {
             guard book.format != .pdf else { return }
             isSearchActive = true
             searchFocusTrigger += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .addBookmarkRequested)) { _ in
+            isAddingBookmark = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .nextMatchRequested)) { _ in
             guard !searchMatches.isEmpty else { return }
