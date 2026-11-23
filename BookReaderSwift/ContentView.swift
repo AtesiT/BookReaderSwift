@@ -1367,6 +1367,7 @@ struct ReaderToolbarContent: View {
                     } label: {
                         Image(systemName: "chevron.up")
                     }
+                    .buttonStyle(.plain)
                     .disabled(matchCount == 0)
 
                     Button {
@@ -1375,6 +1376,7 @@ struct ReaderToolbarContent: View {
                     } label: {
                         Image(systemName: "chevron.down")
                     }
+                    .buttonStyle(.plain)
                     .disabled(matchCount == 0)
                 }
             }
@@ -1752,7 +1754,7 @@ struct ReaderView: View {
     }
 
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
-        guard !isRestoringTextPosition else { return }
+        guard !isRestoringTextPosition, !paragraphs.isEmpty else { return }
         let scrollableHeight = contentHeight - viewportHeight
         guard scrollableHeight > 0 else {
             book.lastProgress = 1
