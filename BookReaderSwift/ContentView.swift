@@ -795,6 +795,7 @@ struct ContentView: View {
                 }
                 renamingBook = nil
             }
+            .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Отмена", role: .cancel) { renamingBook = nil }
         }
         .overlay {
