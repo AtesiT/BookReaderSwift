@@ -732,15 +732,21 @@ struct ContentView: View {
             return books.sorted { $0.title.localizedCompare($1.title) == .orderedAscending }
         case .author:
             return books.sorted { lhs, rhs in
-                switch (lhs.author, rhs.author) {
+                let lhsAuthor = lhs.author?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                let rhsAuthor = rhs.author?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                switch (lhsAuthor, rhsAuthor) {
                 case (nil, nil):
-                    return false
+                    return lhs.title.localizedCompare(rhs.title) == .orderedAscending
                 case (nil, _):
                     return false
                 case (_, nil):
                     return true
                 case let (l?, r?):
-                    return l.localizedCompare(r) == .orderedAscending
+                    let cmp = l.localizedCompare(r)
+                    if cmp == .orderedSame {
+                        return lhs.title.localizedCompare(rhs.title) == .orderedAscending
+                    }
+                    return cmp == .orderedAscending
                 }
             }
         case .recentlyAdded:
@@ -1079,6 +1085,12 @@ struct ContentView: View {
         } catch {
             errorMessage = "Не удалось сохранить изменения: \(error.localizedDescription)"
         }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 
