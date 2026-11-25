@@ -1575,7 +1575,8 @@ struct ReaderView: View {
             storedFontSize = max(storedFontSize - 1, 12)
         }
         .onReceive(NotificationCenter.default.publisher(for: .jumpToProgressRequested)) { notification in
-            guard let progress = notification.userInfo?["progress"] as? Double else { return }
+            guard let rawProgress = notification.userInfo?["progress"] as? Double else { return }
+            let progress = min(max(rawProgress, 0), 1)
             progressSaveTask?.cancel()
             book.lastProgress = progress
             if book.format == .pdf {
