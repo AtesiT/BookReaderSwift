@@ -1649,9 +1649,16 @@ struct ReaderView: View {
                 .padding(.vertical, 24)
                 .background(
                     GeometryReader { geo in
+                        let frame = geo.frame(in: .named("scroll"))
                         Color.clear
-                            .onChange(of: geo.frame(in: .named("scroll")).minY) { _, minY in
+                            .onAppear {
+                                updateProgress(minY: frame.minY, contentHeight: geo.size.height)
+                            }
+                            .onChange(of: frame.minY) { _, minY in
                                 updateProgress(minY: minY, contentHeight: geo.size.height)
+                            }
+                            .onChange(of: geo.size.height) { _, newHeight in
+                                updateProgress(minY: frame.minY, contentHeight: newHeight)
                             }
                     }
                 )
@@ -1672,7 +1679,7 @@ struct ReaderView: View {
             }
         }
     }
-
+    
     private var addBookmarkSheet: some View {
         VStack(spacing: 16) {
             Text("Новая закладка")
@@ -1769,18 +1776,23 @@ struct ReaderView: View {
 
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
         guard !isRestoringTextPosition, !paragraphs.isEmpty else { return }
+
+        guard viewportHeight > 0, contentHeight > 0 else { return }
+
         let scrollableHeight = contentHeight - viewportHeight
-        guard scrollableHeight > 0 else {
+
+        if scrollableHeight <= 1 {
             book.lastProgress = 1
             scheduleProgressSave()
             return
         }
-        let scrolled = max(0, -minY)
+
+        let scrolled = min(max(-minY, 0), scrollableHeight)
         let progress = min(max(Double(scrolled / scrollableHeight), 0), 1)
         book.lastProgress = progress
         scheduleProgressSave()
     }
-
+    
     private func scheduleProgressSave() {
         progressSaveTask?.cancel()
         progressSaveTask = Task {
