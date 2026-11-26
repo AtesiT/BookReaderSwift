@@ -1834,34 +1834,48 @@ struct ReaderView: View {
         let query = searchText
         let currentParagraphs = paragraphs
         let isPDF = book.format == .pdf
-        
+
         guard !query.isEmpty, !isPDF else {
             searchMatches = []
             matchesByParagraph = [:]
             currentMatchIndex = 0
             return
         }
-        
+
         searchTask = Task.detached(priority: .userInitiated) {
             if !immediate {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 guard !Task.isCancelled else { return }
             }
-            
+
             var matches: [SearchMatch] = []
             var grouped: [Int: [Int]] = [:]
-            
+
             for (index, paragraph) in currentParagraphs.enumerated() {
                 if Task.isCancelled { return }
                 var searchStart = paragraph.startIndex
-                while let range = paragraph.range(of: query, options: .caseInsensitive, range: searchStart..<paragraph.endIndex) {
+                while searchStart < paragraph.endIndex {
+                    if Task.isCancelled { return }
+                    guard let range = paragraph.range(
+                        of: query,
+                        options: .caseInsensitive,
+                        range: searchStart..<paragraph.endIndex
+                    ) else { break }
+                    if range.isEmpty || range.lowerBound == range.upperBound {
+                        searchStart = paragraph.index(after: range.upperBound)
+                        continue
+                    }
+                    if range.lowerBound < searchStart {
+                        searchStart = paragraph.index(after: searchStart)
+                        continue
+                    }
                     let matchIdx = matches.count
                     matches.append(SearchMatch(paragraphIndex: index, range: range))
                     grouped[index, default: []].append(matchIdx)
                     searchStart = range.upperBound
                 }
             }
-            
+
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 self.searchMatches = matches
