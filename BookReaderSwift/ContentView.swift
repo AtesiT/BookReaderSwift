@@ -1679,7 +1679,7 @@ struct ReaderView: View {
             }
         }
     }
-    
+
     private var addBookmarkSheet: some View {
         VStack(spacing: 16) {
             Text("Новая закладка")
@@ -1776,23 +1776,19 @@ struct ReaderView: View {
 
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
         guard !isRestoringTextPosition, !paragraphs.isEmpty else { return }
-
         guard viewportHeight > 0, contentHeight > 0 else { return }
-
         let scrollableHeight = contentHeight - viewportHeight
-
         if scrollableHeight <= 1 {
             book.lastProgress = 1
             scheduleProgressSave()
             return
         }
-
         let scrolled = min(max(-minY, 0), scrollableHeight)
         let progress = min(max(Double(scrolled / scrollableHeight), 0), 1)
         book.lastProgress = progress
         scheduleProgressSave()
     }
-    
+
     private func scheduleProgressSave() {
         progressSaveTask?.cancel()
         progressSaveTask = Task {
@@ -2049,10 +2045,16 @@ struct PDFKitView: NSViewRepresentable {
         }
 
         @objc func pageChanged() {
+            if pendingRestoreProgress != nil {
+                pendingRestoreProgress = nil
+            }
             updateProgress()
         }
 
         @objc func scrollChanged() {
+            if pendingRestoreProgress != nil {
+                pendingRestoreProgress = nil
+            }
             updateProgress()
         }
 
