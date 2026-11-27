@@ -725,6 +725,7 @@ struct ContentView: View {
     @State private var sortOrder: LibrarySortOrder = .recentlyAdded
     @State private var renamingBook: Book?
     @State private var renameText: String = ""
+    @State private var lastMarkedBookID: PersistentIdentifier?
 
     private var sortedBooks: [Book] {
         switch sortOrder {
@@ -811,6 +812,9 @@ struct ContentView: View {
         }
         .onAppear {
             showStartupMessageIfNeeded()
+            if let book = currentBook {
+                markBookOpened(book)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openBookRequested)) { _ in
             guard !isProcessingImport else { return }
@@ -818,6 +822,11 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .closeBookRequested)) { _ in
             currentBook = nil
+        }
+        .onChange(of: currentBook?.persistentModelID) { _, _ in
+            if let book = currentBook {
+                markBookOpened(book)
+            }
         }
     }
 
@@ -878,9 +887,6 @@ struct ContentView: View {
             })
             .id(currentBook.persistentModelID)
             .transition(.opacity)
-            .onAppear {
-                markBookOpened(currentBook)
-            }
         } else if books.isEmpty {
             EmptyLibraryView {
                 guard !isProcessingImport else { return }
@@ -1063,6 +1069,13 @@ struct ContentView: View {
     }
 
     private func markBookOpened(_ book: Book) {
+        if lastMarkedBookID == book.persistentModelID,
+           let session = book.readingSession,
+           Date().timeIntervalSince(session.lastOpened) < 5 {
+            return
+        }
+        lastMarkedBookID = book.persistentModelID
+
         if let session = book.readingSession {
             session.lastOpened = .now
             session.openCount += 1
@@ -1441,11 +1454,11 @@ struct ReaderView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var book: Book
     var onClose: () -> Void
-    
+
     @AppStorage("readingTheme") private var themeRawValue: String = ReadingTheme.light.rawValue
     @AppStorage("readingFont") private var fontRawValue: String = ReadingFont.serif.rawValue
     @AppStorage("readingFontSize") private var storedFontSize: Double = 17
-    
+
     @State private var paragraphs: [String] = []
     @State private var totalContentLength: Int = 0
     @State private var searchText: String = ""
@@ -1466,51 +1479,51 @@ struct ReaderView: View {
     @State private var scrollProxy: ScrollViewProxy?
     @State private var viewportHeight: CGFloat = 0
     @State private var liveTextProgress: Double = 0
-    
+
     @FocusState private var isBookmarkFieldFocused: Bool
-    
+
     private struct ReaderTaskID: Equatable {
         let bookID: PersistentIdentifier
     }
-    
+
     private struct SearchMatch {
         let paragraphIndex: Int
         let range: Range<String.Index>
     }
-    
+
     private var currentTheme: ReadingTheme {
         ReadingTheme(rawValue: themeRawValue) ?? .light
     }
-    
+
     private var currentFont: ReadingFont {
         ReadingFont(rawValue: fontRawValue) ?? .serif
     }
-    
+
     private var fontSize: CGFloat {
         CGFloat(storedFontSize)
     }
-    
+
     private var themeBinding: Binding<ReadingTheme> {
         Binding(
             get: { currentTheme },
             set: { themeRawValue = $0.rawValue }
         )
     }
-    
+
     private var fontBinding: Binding<ReadingFont> {
         Binding(
             get: { currentFont },
             set: { fontRawValue = $0.rawValue }
         )
     }
-    
+
     private var fontSizeBinding: Binding<CGFloat> {
         Binding(
             get: { CGFloat(storedFontSize) },
             set: { storedFontSize = Double($0) }
         )
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
             ReaderToolbarContent(
@@ -1527,9 +1540,9 @@ struct ReaderView: View {
                 onClose: onClose,
                 onAddBookmark: { isAddingBookmark = true }
             )
-            
+
             Divider()
-            
+
             content
         }
         .background(currentTheme.backgroundColor)
@@ -1614,7 +1627,7 @@ struct ReaderView: View {
             saveProgress()
         }
     }
-    
+
     @ViewBuilder
     private var content: some View {
         switch book.format {
@@ -1634,7 +1647,7 @@ struct ReaderView: View {
             }
         }
     }
-    
+
     private var textReader: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -1681,7 +1694,7 @@ struct ReaderView: View {
             }
         }
     }
-    
+
     private var addBookmarkSheet: some View {
         VStack(spacing: 16) {
             Text("Новая закладка")
@@ -1704,7 +1717,7 @@ struct ReaderView: View {
         .padding(20)
         .frame(width: 320)
     }
-    
+
     private func loadContent() async {
         isLoadingContent = true
         searchTask?.cancel()
@@ -1740,17 +1753,17 @@ struct ReaderView: View {
             }
         }
     }
-    
+
     private static func splitParagraphs(from rawContent: String) -> [String] {
         let normalized = rawContent
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
-        
+
         let doubleNewlineChunks = normalized
             .components(separatedBy: "\n\n")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        
+
         if doubleNewlineChunks.count <= 1, normalized.contains("\n") {
             let singleLineChunks = normalized
                 .components(separatedBy: "\n")
@@ -1760,7 +1773,7 @@ struct ReaderView: View {
                 return singleLineChunks
             }
         }
-        
+
         var result: [String] = []
         result.reserveCapacity(doubleNewlineChunks.count)
         for chunk in doubleNewlineChunks {
@@ -1776,7 +1789,7 @@ struct ReaderView: View {
         }
         return result
     }
-    
+
     private func updateProgress(minY: CGFloat, contentHeight: CGFloat) {
         guard !isRestoringTextPosition, !paragraphs.isEmpty else { return }
         guard viewportHeight > 0, contentHeight > 0 else { return }
@@ -1793,7 +1806,7 @@ struct ReaderView: View {
         book.lastProgress = progress
         scheduleProgressSave()
     }
-    
+
     private func scheduleProgressSave() {
         progressSaveTask?.cancel()
         progressSaveTask = Task {
@@ -1804,7 +1817,7 @@ struct ReaderView: View {
             }
         }
     }
-    
+
     private func restoreTextPosition(proxy: ScrollViewProxy) {
         guard book.lastProgress > 0, !paragraphs.isEmpty else {
             isRestoringTextPosition = false
@@ -1820,7 +1833,7 @@ struct ReaderView: View {
             }
         }
     }
-    
+
     private func saveProgress() {
         do {
             try modelContext.save()
@@ -1828,7 +1841,7 @@ struct ReaderView: View {
             print("Не удалось сохранить прогресс чтения: \(error.localizedDescription)")
         }
     }
-    
+
     private func scheduleSearchRecompute(immediate: Bool = false) {
         searchTask?.cancel()
         let query = searchText
@@ -1885,7 +1898,7 @@ struct ReaderView: View {
             }
         }
     }
-    
+
     private func scrollToCurrentMatch() {
         guard searchMatches.indices.contains(currentMatchIndex) else { return }
         let paragraphIndex = searchMatches[currentMatchIndex].paragraphIndex
@@ -1893,7 +1906,7 @@ struct ReaderView: View {
             scrollProxy?.scrollTo(paragraphIndex, anchor: .center)
         }
     }
-    
+
     private func highlightedText(for paragraph: String, paragraphIndex: Int) -> AttributedString {
         guard isSearchActive,
               !searchText.isEmpty,
@@ -1901,7 +1914,7 @@ struct ReaderView: View {
               !matchIndices.isEmpty else {
             return AttributedString(paragraph)
         }
-        
+
         var attributed = AttributedString(paragraph)
         for matchIdx in matchIndices {
             guard searchMatches.indices.contains(matchIdx) else { continue }
@@ -1910,10 +1923,10 @@ struct ReaderView: View {
                 attributed[attrRange].backgroundColor = (matchIdx == currentMatchIndex) ? .orange : .yellow.opacity(0.5)
             }
         }
-        
+
         return attributed
     }
-    
+
     private func addBookmark() {
         let label = newBookmarkLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalLabel = label.isEmpty ? "Закладка \(book.bookmarks.count + 1)" : label
