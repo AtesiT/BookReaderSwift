@@ -1933,7 +1933,9 @@ struct ReaderView: View {
                 self.searchMatches = matches
                 self.matchesByParagraph = grouped
                 self.currentMatchIndex = 0
-                self.scrollToCurrentMatch()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    self.scrollToCurrentMatch()
+                }
             }
         }
     }
