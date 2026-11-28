@@ -1852,14 +1852,27 @@ struct ReaderView: View {
         isRestoringTextPosition = true
         liveTextProgress = book.lastProgress
         let index = min(Int(Double(paragraphs.count) * book.lastProgress), paragraphs.count - 1)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+
+        func attemptScroll(remainingAttempts: Int) {
+            guard remainingAttempts > 0 else {
+                isRestoringTextPosition = false
+                return
+            }
             proxy.scrollTo(index, anchor: .top)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                isRestoringTextPosition = false
+                attemptScroll(remainingAttempts: remainingAttempts - 1)
             }
         }
-    }
 
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            attemptScroll(remainingAttempts: 3)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            isRestoringTextPosition = false
+        }
+    }
+    
     private func saveProgress() {
         do {
             try modelContext.save()
