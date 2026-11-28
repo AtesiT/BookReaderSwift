@@ -1132,9 +1132,16 @@ struct BookCoverView: View {
     }
 
     private func generatedColor(from seed: String) -> Color {
-        let hash = seed.utf8.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1) }
-        let hue = Double(hash % 360) / 360.0
-        return Color(hue: hue, saturation: 0.55, brightness: 0.65)
+        var hash: UInt64 = 1469598103934665603
+        for byte in seed.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1099511628211
+        }
+        let goldenAngle = 0.618033988749895
+        let baseHue = (Double(hash % 10_000) / 10_000.0 * goldenAngle).truncatingRemainder(dividingBy: 1.0)
+        let saturation = 0.45 + Double((hash >> 8) % 20) / 100.0
+        let brightness = 0.55 + Double((hash >> 16) % 20) / 100.0
+        return Color(hue: baseHue, saturation: saturation, brightness: brightness)
     }
 }
 
