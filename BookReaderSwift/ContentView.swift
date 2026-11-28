@@ -2114,22 +2114,30 @@ struct PDFKitView: NSViewRepresentable {
                   let currentPage = pdfView.currentPage else { return }
 
             let pageIndex = document.index(for: currentPage)
-
-            let visibleRect = pdfView.convert(pdfView.bounds, to: currentPage)
             let pageBounds = currentPage.bounds(for: pdfView.displayBox)
             let pageHeight = pageBounds.height
 
             var fractionWithinPage: Double = 0
             if pageHeight > 0 {
-                let distanceFromTop = pageBounds.maxY - visibleRect.maxY
+                let visibleTopInPage = pdfView.convert(
+                    CGPoint(x: pdfView.bounds.minX, y: pdfView.bounds.maxY),
+                    to: currentPage
+                )
+                let distanceFromTop = pageBounds.maxY - visibleTopInPage.y
                 fractionWithinPage = min(max(Double(distanceFromTop / pageHeight), 0), 1)
             }
 
             var newProgress = min(max((Double(pageIndex) + fractionWithinPage) / Double(document.pageCount), 0), 1)
 
             let isLastPage = pageIndex == document.pageCount - 1
-            if isLastPage, pageHeight > 0, visibleRect.minY <= pageBounds.minY + 1 {
-                newProgress = 1
+            if isLastPage, pageHeight > 0 {
+                let visibleBottomInPage = pdfView.convert(
+                    CGPoint(x: pdfView.bounds.maxX, y: pdfView.bounds.minY),
+                    to: currentPage
+                )
+                if visibleBottomInPage.y <= pageBounds.minY + 1 {
+                    newProgress = 1
+                }
             }
 
             if abs(newProgress - lastReportedProgress) > 0.001 {
