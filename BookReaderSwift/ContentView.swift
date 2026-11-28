@@ -1641,9 +1641,23 @@ struct ReaderView: View {
         case .pdf:
             if let pdfDocument {
                 PDFKitView(document: pdfDocument, currentPageIndex: $pdfPageIndex, progress: $pdfProgress)
-            } else {
+            } else if isLoadingContent {
                 ProgressView("Загрузка PDF…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.orange)
+                    Text("Не удалось открыть PDF")
+                        .font(.headline)
+                    Text("Файл повреждён или имеет неподдерживаемый формат.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         default:
             if isLoadingContent {
@@ -1731,13 +1745,16 @@ struct ReaderView: View {
         searchMatches = []
         matchesByParagraph = [:]
         currentMatchIndex = 0
+        let loadedBookID = book.persistentModelID
         switch book.format {
         case .pdf:
             let data = book.pdfData
             let document = await Task.detached(priority: .userInitiated) {
                 data.flatMap { PDFDocument(data: $0) }
             }.value
+            guard !Task.isCancelled else { return }
             await MainActor.run {
+                guard book.persistentModelID == loadedBookID else { return }
                 self.pdfDocument = document
                 self.pdfProgress = book.lastProgress
                 self.pdfPageIndex = book.lastPageIndex
@@ -1748,7 +1765,9 @@ struct ReaderView: View {
             let computedParagraphs = await Task.detached(priority: .userInitiated) {
                 Self.splitParagraphs(from: content)
             }.value
+            guard !Task.isCancelled else { return }
             await MainActor.run {
+                guard book.persistentModelID == loadedBookID else { return }
                 self.paragraphs = computedParagraphs
                 self.totalContentLength = content.count
                 self.liveTextProgress = book.lastProgress
